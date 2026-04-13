@@ -57,7 +57,7 @@ cp .env.example .env
 
 Open `backend/.env` in your editor and fill in your API keys. You only need keys for the models you plan to use. For example, if you only want to use GPT models, you just need `OPENAI_API_KEY`.
 
-See **[ENV_README.md](../ENV_README.md)** for a detailed explanation of each variable.
+See **[ENV_README](../ENV_README)** for a detailed explanation of each variable.
 
 ## Step 4: Start the Backend
 

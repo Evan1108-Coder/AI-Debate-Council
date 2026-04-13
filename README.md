@@ -86,7 +86,7 @@ AI-Debate-Council/
 │   └── package.json
 ├── .env.example             # Root env template (same as backend)
 ├── README.md                # This file
-├── ENV_README.md            # Detailed environment variable guide
+├── ENV_README               # Detailed environment variable guide
 ├── SETUP.md                 # Step-by-step installation guide
 ├── TROUBLESHOOTING.md       # Common issues and fixes
 └── LICENSE                  # MIT License
@@ -110,7 +110,7 @@ AI-Debate-Council/
 
 See **[SETUP.md](SETUP.md)** for full installation and setup instructions.
 
-See **[ENV_README.md](ENV_README.md)** for detailed information about environment variables and API keys.
+See **[ENV_README](ENV_README)** for detailed information about environment variables and API keys.
 
 See **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** if you run into issues.
 
