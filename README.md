@@ -1,147 +1,122 @@
 # AI Debate Council - MultiAI System
 
-A multi-AI debate platform where 4 AI debaters (Advocate, Critic, Researcher, Devil's Advocate) argue a topic from different perspectives, followed by a Judge's verdict. Supports 16+ AI models via LiteLLM.
+A full-stack multi-AI debate platform where multiple AI debaters argue a topic from different perspectives, culminating in a Judge's verdict. Powered by 16+ AI models via LiteLLM, with real-time WebSocket streaming and a ChatGPT-style interface.
 
-## Features
+## What It Does
 
-- **4 Debaters + Judge** - Each with a unique perspective and role
-- **16 AI Models** - OpenAI, Anthropic, Google, Llama, MiniMax via LiteLLM
-- **Real-time Streaming** - Watch the debate unfold via WebSocket
-- **Multi-round Debates** - Configure 1-5 rounds per debate
-- **ChatGPT-style UI** - Sidebar with session management
-- **Up to 3 Concurrent Debates** - Run multiple debates simultaneously
-- **Up to 10 Chat Sessions** - With rename and delete support
+You enter a debate topic. Four AI debaters -- each with a distinct role -- take turns arguing over multiple rounds. A Judge then delivers a final verdict weighing all arguments. The entire debate streams in real-time to a clean, modern UI.
 
-## Debater Roles
+### Debater Roles
 
 | Role | Purpose |
 |------|---------|
-| Advocate | Argues **in favor** of the topic |
-| Critic | Argues **against** the topic |
-| Researcher | Provides **factual context** and evidence |
-| Devil's Advocate | Challenges **all sides** with contrarian views |
-| Judge | Delivers a **balanced verdict** |
+| **Advocate** | Argues **in favor** of the topic with evidence and persuasive reasoning |
+| **Critic** | Argues **against** the topic, identifying weaknesses and risks |
+| **Researcher** | Provides **factual context**, data, studies, and expert opinions |
+| **Devil's Advocate** | Challenges **all sides** with unexpected angles and edge cases |
+| **Judge** | Delivers a **balanced verdict** after evaluating all arguments |
+
+## Features
+
+- **Multi-Round Debates** -- Configure 1 to 5 rounds per debate for deeper discussion
+- **16 AI Models** -- Switch between OpenAI, Anthropic, Google, Llama, and MiniMax models
+- **Real-Time Streaming** -- Watch each debater's response appear token by token via WebSocket
+- **ChatGPT-Style Sidebar** -- Manage up to 10 debate sessions with rename and delete
+- **Concurrent Debates** -- Run up to 3 debates simultaneously
+- **Persistent History** -- All debates stored in SQLite; revisit past sessions anytime
+- **Session Numbering** -- Auto-incrementing names ("Debate Session #1", "#2", ...) that reset only when all sessions are deleted
 
 ## Supported Models
 
-**OpenAI:** gpt-5.4-pro, gpt-5.4-mini, gpt-4o, gpt-4o-mini
-**Anthropic:** claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5, claude-3.5-sonnet
-**Google:** gemini-3.1-pro, gemini-3-flash, gemini-2.5-flash-lite
-**Llama (Groq):** llama-4-maverick, llama-4-scout, llama-3.3-70b
-**MiniMax:** minimax-m2.7, minimax-m2.5-lightning
+| Provider | Models |
+|----------|--------|
+| **OpenAI** | gpt-5.4-pro, gpt-5.4-mini, gpt-4o, gpt-4o-mini |
+| **Anthropic** | claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5, claude-3.5-sonnet |
+| **Google** | gemini-3.1-pro, gemini-3-flash, gemini-2.5-flash-lite |
+| **Llama (via Groq)** | llama-4-maverick, llama-4-scout, llama-3.3-70b |
+| **MiniMax** | minimax-m2.7, minimax-m2.5-lightning |
 
-## Quick Start
+## Tech Stack
 
-### Prerequisites
+- **Backend:** Python FastAPI with async WebSocket support
+- **Frontend:** Next.js 16 (App Router) + TypeScript + Tailwind CSS
+- **Database:** SQLite with WAL mode via aiosqlite
+- **Model Routing:** LiteLLM for unified access to all AI providers
+- **Real-Time:** WebSocket streaming for token-by-token debate output
 
-- Python 3.10+
-- Node.js 18+
-- npm
+## Architecture
 
-### 1. Clone the repository
-
-```bash
-git clone https://github.com/Evan1108-Coder/AI-Debate-Council.git
-cd AI-Debate-Council
 ```
-
-### 2. Set up the backend
-
-```bash
-cd backend
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-pip install -r requirements.txt
+Frontend (Next.js :3000)          Backend (FastAPI :8000)
+┌──────────────────────┐          ┌──────────────────────┐
+│  Sidebar             │  REST    │  /api/sessions       │
+│  ├─ Session list     │◄────────►│  /api/models         │
+│  ├─ New/Rename/Delete│          │  /api/sessions/:id   │
+│                      │          │                      │
+│  ChatArea            │  WS      │  /ws/debate/:id      │
+│  ├─ Topic input      │◄────────►│  ├─ Debate Engine    │
+│  ├─ Model selector   │ stream   │  │  ├─ Advocate      │
+│  ├─ Message display  │          │  │  ├─ Critic        │
+│  └─ Round indicator  │          │  │  ├─ Researcher    │
+│                      │          │  │  ├─ Devil's Adv.  │
+│                      │          │  │  └─ Judge         │
+│                      │          │  └─ LiteLLM ─► APIs  │
+└──────────────────────┘          └──────────────────────┘
+                                           │
+                                     SQLite (WAL)
 ```
-
-### 3. Configure environment variables
-
-```bash
-cp .env.example .env
-# Edit .env and add your API keys
-```
-
-You need at least **one** API key to get started. For example, just an `OPENAI_API_KEY` will let you use GPT models.
-
-### 4. Start the backend
-
-```bash
-python main.py
-```
-
-The API server starts at `http://localhost:8000`.
-
-### 5. Set up the frontend
-
-```bash
-cd ../frontend
-npm install
-```
-
-### 6. Start the frontend
-
-```bash
-npm run dev
-```
-
-The frontend starts at `http://localhost:3000`.
-
-### 7. Open the app
-
-Visit `http://localhost:3000` in your browser. Create a new debate session, pick a model, enter a topic, and watch the debate unfold!
 
 ## Project Structure
 
 ```
 AI-Debate-Council/
 ├── backend/
-│   ├── main.py           # FastAPI app with REST + WebSocket endpoints
-│   ├── database.py       # SQLite database setup and helpers
-│   ├── models.py         # Pydantic models and LiteLLM model mapping
-│   ├── debate.py         # Debate engine (roles, prompts, streaming)
-│   ├── requirements.txt  # Python dependencies
-│   └── .env.example      # Environment variable template
+│   ├── main.py              # FastAPI app, REST + WebSocket endpoints
+│   ├── database.py          # SQLite setup, session counter logic
+│   ├── models.py            # Pydantic schemas, LiteLLM model map
+│   ├── debate.py            # Debate engine, role prompts, streaming
+│   ├── requirements.txt     # Python dependencies
+│   └── .env.example         # Backend env template
 ├── frontend/
 │   ├── src/
-│   │   ├── app/          # Next.js App Router pages
-│   │   ├── components/   # React components (Sidebar, ChatArea)
-│   │   └── lib/          # API client, types
-│   ├── .env.example      # Frontend env template
+│   │   ├── app/             # Next.js App Router (layout, page)
+│   │   ├── components/      # Sidebar, ChatArea
+│   │   └── lib/             # API client, TypeScript types
+│   ├── .env.example         # Frontend env template
 │   └── package.json
-├── .env.example           # Root env template
-├── README.md
-├── TROUBLESHOOTING.md
-└── LICENSE
+├── .env.example             # Root env template (same as backend)
+├── README.md                # This file
+├── ENV_README.md            # Detailed environment variable guide
+├── SETUP.md                 # Step-by-step installation guide
+├── TROUBLESHOOTING.md       # Common issues and fixes
+└── LICENSE                  # MIT License
 ```
 
 ## API Endpoints
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/models` | List available models |
-| GET | `/api/sessions` | List all sessions |
-| POST | `/api/sessions` | Create a new session |
-| GET | `/api/sessions/:id` | Get session details |
-| PATCH | `/api/sessions/:id/rename` | Rename a session |
-| PATCH | `/api/sessions/:id/model` | Change session model |
-| DELETE | `/api/sessions/:id` | Delete a session |
-| GET | `/api/sessions/:id/messages` | Get session messages |
-| WS | `/ws/debate/:id` | WebSocket for debate streaming |
+| `GET` | `/api/models` | List all available AI models |
+| `GET` | `/api/sessions` | List all debate sessions |
+| `POST` | `/api/sessions` | Create a new debate session |
+| `GET` | `/api/sessions/:id` | Get a specific session |
+| `PATCH` | `/api/sessions/:id/rename` | Rename a session |
+| `PATCH` | `/api/sessions/:id/model` | Change the model for a session |
+| `DELETE` | `/api/sessions/:id` | Delete a session |
+| `GET` | `/api/sessions/:id/messages` | Get all messages in a session |
+| `WS` | `/ws/debate/:id` | WebSocket endpoint for live debate |
 
-## Environment Variables
+## Getting Started
 
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `OPENAI_API_KEY` | For OpenAI models | OpenAI API key |
-| `ANTHROPIC_API_KEY` | For Claude models | Anthropic API key |
-| `GEMINI_API_KEY` | For Gemini models | Google AI API key |
-| `GROQ_API_KEY` | For Llama models | Groq API key |
-| `MINIMAX_API_KEY` | For MiniMax models | MiniMax API key |
-| `MINIMAX_GROUP_ID` | For MiniMax models | MiniMax group ID |
+See **[SETUP.md](SETUP.md)** for full installation and setup instructions.
+
+See **[ENV_README.md](ENV_README.md)** for detailed information about environment variables and API keys.
+
+See **[TROUBLESHOOTING.md](TROUBLESHOOTING.md)** if you run into issues.
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) for details.
+MIT License -- see [LICENSE](LICENSE) for details.
 
 ## Author
 
