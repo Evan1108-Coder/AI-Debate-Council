@@ -39,6 +39,12 @@ AVAILABLE_MODELS = [
     # MiniMax
     "minimax-m2.7",
     "minimax-m2.5-lightning",
+    # Moonshot / Kimi
+    "kimi-latest",
+    "kimi-k2-thinking",
+    "kimi-k2-turbo-preview",
+    "kimi-k2.5-vision",
+    "moonshot-v1-128k",
 ]
 
 # LiteLLM model mapping
@@ -59,6 +65,11 @@ MODEL_MAP = {
     "llama-3.3-70b": "groq/llama-3.3-70b-versatile",
     "minimax-m2.7": "minimax/MiniMax-M2.7",
     "minimax-m2.5-lightning": "minimax/MiniMax-M2.5-lightning",
+    "kimi-latest": "moonshot/kimi-latest",
+    "kimi-k2-thinking": "moonshot/kimi-k2-thinking",
+    "kimi-k2-turbo-preview": "moonshot/kimi-k2-turbo-preview",
+    "kimi-k2.5-vision": "moonshot/kimi-k2.5-vision",
+    "moonshot-v1-128k": "moonshot/moonshot-v1-128k",
 }
 
 

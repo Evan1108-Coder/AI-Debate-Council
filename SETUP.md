@@ -170,18 +170,22 @@ A virtual environment is an isolated space for this project's Python packages, s
 
 **macOS / Linux:**
 ```bash
-python3 -m venv venv
+python3.13 -m venv venv
 ```
+
+> If `python3.13` is not found, use `python3 -m venv venv` instead. We recommend Python 3.13 because some dependencies don't support 3.14+ yet (see TROUBLESHOOTING.md).
 
 **Windows:**
 ```bash
-python -m venv venv
+py -3.13 -m venv venv
 ```
+
+> If `py -3.13` is not found, use `python -m venv venv` instead. We recommend Python 3.13 because some dependencies don't support 3.14+ yet (see TROUBLESHOOTING.md).
 
 **What you should see:** Nothing! No output means it worked. A new folder called `venv` was created inside the `backend` directory.
 
 **If you get an error:**
-- `"python3: command not found"` -- Go back to Step 0b and install Python
+- `"python3.13: command not found"` -- Either install Python 3.13 (`brew install python@3.13` on Mac), or use `python3 -m venv venv` instead
 - `"No module named venv"` -- Your Python installation might be incomplete. Try reinstalling Python from https://www.python.org/downloads/
 
 ### 2c. Activate the virtual environment
@@ -272,11 +276,12 @@ Open the `.env` file in any text editor:
 
 You'll see lines like this:
 ```
-OPENAI_API_KEY=
-ANTHROPIC_API_KEY=
-GOOGLE_API_KEY=
-GROQ_API_KEY=
-MINIMAX_API_KEY=
+OPENAI_API_KEY=          # For: gpt-5.4-pro, gpt-5.4-mini, gpt-4o, gpt-4o-mini
+ANTHROPIC_API_KEY=       # For: claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5, claude-3.5-sonnet
+GEMINI_API_KEY=          # For: gemini-3.1-pro, gemini-3-flash, gemini-2.5-flash-lite
+GROQ_API_KEY=            # For: llama-4-maverick, llama-4-scout, llama-3.3-70b
+MINIMAX_API_KEY=         # For: minimax-m2.7, minimax-m2.5-lightning
+MOONSHOT_API_KEY=        # For: kimi-latest, kimi-k2-thinking, kimi-k2-turbo-preview, kimi-k2.5-vision, moonshot-v1-128k
 ```
 
 **You only need to fill in keys for the AI provider(s) you plan to use.** For example, if you only have an OpenAI key:
@@ -284,9 +289,10 @@ MINIMAX_API_KEY=
 ```
 OPENAI_API_KEY=sk-proj-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 ANTHROPIC_API_KEY=
-GOOGLE_API_KEY=
+GEMINI_API_KEY=
 GROQ_API_KEY=
 MINIMAX_API_KEY=
+MOONSHOT_API_KEY=
 ```
 
 Leave the other lines empty -- that's fine.

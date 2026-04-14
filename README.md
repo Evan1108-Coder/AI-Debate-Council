@@ -1,6 +1,6 @@
 # AI Debate Council - MultiAI System
 
-A full-stack multi-AI debate platform where multiple AI debaters argue a topic from different perspectives, culminating in a Judge's verdict. Powered by 16+ AI models via LiteLLM, with real-time WebSocket streaming and a ChatGPT-style interface.
+A full-stack multi-AI debate platform where multiple AI debaters argue a topic from different perspectives, culminating in a Judge's verdict. Powered by 21 AI models via LiteLLM, with real-time WebSocket streaming and a ChatGPT-style interface.
 
 ## What It Does
 
@@ -19,7 +19,7 @@ You enter a debate topic. Four AI debaters -- each with a distinct role -- take 
 ## Features
 
 - **Multi-Round Debates** -- Configure 1 to 5 rounds per debate for deeper discussion
-- **16 AI Models** -- Switch between OpenAI, Anthropic, Google, Llama, and MiniMax models
+- **21 AI Models** -- Switch between OpenAI, Anthropic, Google, Llama, MiniMax, and Moonshot/Kimi models
 - **Real-Time Streaming** -- Watch each debater's response appear token by token via WebSocket
 - **ChatGPT-Style Sidebar** -- Manage up to 10 debate sessions with rename and delete
 - **Concurrent Debates** -- Run up to 3 debates simultaneously
@@ -35,6 +35,7 @@ You enter a debate topic. Four AI debaters -- each with a distinct role -- take 
 | **Google** | gemini-3.1-pro, gemini-3-flash, gemini-2.5-flash-lite |
 | **Llama (via Groq)** | llama-4-maverick, llama-4-scout, llama-3.3-70b |
 | **MiniMax** | minimax-m2.7, minimax-m2.5-lightning |
+| **Moonshot / Kimi** | kimi-latest, kimi-k2-thinking, kimi-k2-turbo-preview, kimi-k2.5-vision, moonshot-v1-128k |
 
 ## Tech Stack
 
