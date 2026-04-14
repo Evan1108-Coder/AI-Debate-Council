@@ -17,7 +17,6 @@ You only need API keys for the providers you want to use. For example, to use ju
 | `GEMINI_API_KEY` | For Google models | API key for Gemini models (gemini-3.1-pro, gemini-3-flash, gemini-2.5-flash-lite) | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
 | `GROQ_API_KEY` | For Llama models | API key for Llama models via Groq (llama-4-maverick, llama-4-scout, llama-3.3-70b) | [console.groq.com/keys](https://console.groq.com/keys) |
 | `MINIMAX_API_KEY` | For MiniMax models | API key for MiniMax models (minimax-m2.7, minimax-m2.5-lightning) | [platform.minimaxi.com](https://platform.minimaxi.com/) |
-| `MINIMAX_GROUP_ID` | For MiniMax models | Group ID required by MiniMax API | Found in your MiniMax dashboard |
 
 ### Server Settings
 
@@ -42,7 +41,7 @@ It depends on which models you want to use in debates:
 | Claude Opus 4.6, Sonnet 4.6, Haiku 4.5, Claude 3.5 Sonnet | `ANTHROPIC_API_KEY` |
 | Gemini 3.1 Pro, Gemini 3 Flash, Gemini 2.5 Flash Lite | `GEMINI_API_KEY` |
 | Llama 4 Maverick, Llama 4 Scout, Llama 3.3 70B | `GROQ_API_KEY` |
-| MiniMax M2.7, MiniMax M2.5 Lightning | `MINIMAX_API_KEY` + `MINIMAX_GROUP_ID` |
+| MiniMax M2.7, MiniMax M2.5 Lightning | `MINIMAX_API_KEY` |
 
 **Minimum requirement:** At least one API key from any provider above.
 
@@ -57,7 +56,6 @@ ANTHROPIC_API_KEY=sk-ant-abc123...
 GEMINI_API_KEY=
 GROQ_API_KEY=
 MINIMAX_API_KEY=
-MINIMAX_GROUP_ID=
 
 # Server (defaults are fine for local development)
 HOST=0.0.0.0

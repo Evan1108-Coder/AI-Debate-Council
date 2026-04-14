@@ -277,7 +277,6 @@ ANTHROPIC_API_KEY=
 GOOGLE_API_KEY=
 GROQ_API_KEY=
 MINIMAX_API_KEY=
-MINIMAX_GROUP_ID=
 ```
 
 **You only need to fill in keys for the AI provider(s) you plan to use.** For example, if you only have an OpenAI key:
@@ -288,7 +287,6 @@ ANTHROPIC_API_KEY=
 GOOGLE_API_KEY=
 GROQ_API_KEY=
 MINIMAX_API_KEY=
-MINIMAX_GROUP_ID=
 ```
 
 Leave the other lines empty -- that's fine.
