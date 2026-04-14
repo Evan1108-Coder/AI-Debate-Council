@@ -77,6 +77,48 @@ On other systems, reinstall Python from https://www.python.org/downloads/.
 
 ---
 
+### Python 3.14+ / pydantic-core build fails (PyO3 error)
+
+**Symptom:** When running `pip install -r requirements.txt`, you see an error like:
+```
+error: the configured Python interpreter version (3.14) is newer than PyO3's maximum supported version (3.13)
+```
+or:
+```
+Failed building wheel for pydantic-core
+```
+
+**Why:** Python 3.14 is very new. The `pydantic-core` package uses Rust bindings (PyO3) that don't support Python 3.14 yet.
+
+**Fix (Recommended):** Use Python 3.13 instead:
+
+- **macOS:**
+  ```bash
+  brew install python@3.13
+  cd backend
+  rm -rf .venv
+  python3.13 -m venv .venv
+  source .venv/bin/activate
+  pip install -r requirements.txt
+  ```
+
+- **Windows:**
+  Download Python 3.13 from https://www.python.org/downloads/ and install it (check "Add to PATH"). Then:
+  ```bash
+  cd backend
+  rmdir /s /q .venv
+  py -3.13 -m venv .venv
+  .venv\Scripts\activate
+  pip install -r requirements.txt
+  ```
+
+**Alternative (Quick workaround):** Force build with ABI3 compatibility (may have other issues):
+```bash
+PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 pip install -r requirements.txt
+```
+
+---
+
 ## Backend Issues
 
 ### Backend won't start / ModuleNotFoundError
