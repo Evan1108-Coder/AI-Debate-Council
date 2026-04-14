@@ -238,7 +238,7 @@ pip install -r requirements.txt
 
 **What you should see:** A lot of output as packages download and install. It might take 1-2 minutes. At the end, you should see something like:
 ```
-Successfully installed fastapi-0.115.12 uvicorn-0.34.2 litellm-1.67.4 ...
+Successfully installed fastapi-0.115.12 uvicorn-0.34.2 litellm-1.67.2 ...
 ```
 
 **If you get an error:**

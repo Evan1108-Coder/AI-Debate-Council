@@ -1,7 +1,7 @@
 fastapi==0.115.12
 uvicorn[standard]==0.34.2
 websockets==15.0.1
-litellm==1.67.4
+litellm==1.67.2
 python-dotenv==1.1.0
 aiosqlite==0.21.0
 pydantic==2.11.1
