@@ -1,465 +1,324 @@
-# Troubleshooting Guide
+# Troubleshooting
 
-Having issues? Find your problem below. If your issue isn't listed, see the bottom of this page for more help.
+## Python Version Issues
 
----
+Check your Python version:
 
-## Installation & Setup Issues
-
-### "python: command not found" or "python3: command not found"
-
-**Symptom:** You run `python` or `python3` and get `zsh: command not found: python` (Mac) or `'python' is not recognized` (Windows).
-
-**Why:** Python isn't installed, or it's not in your system PATH.
-
-**Fix:**
-
-- **macOS:** Use `python3` instead of `python`. macOS does not include a `python` command by default -- you must use `python3`. If even `python3` doesn't work, install Python:
-  - Option A: `brew install python3` (if you have Homebrew)
-  - Option B: Download from https://www.python.org/downloads/ and run the installer
-  - After installing, **close and reopen your terminal**, then try again.
-
-- **Windows:** Download Python from https://www.python.org/downloads/. During installation, **check "Add Python to PATH"** on the first screen. If you already installed Python without checking that box, uninstall it and reinstall with the box checked. After installing, **close and reopen your terminal**.
-
----
-
-### "pip: command not found" or "pip3: command not found"
-
-**Symptom:** `pip install` or `pip3 install` gives "command not found".
-
-**Fix:**
-- **macOS:** Use `pip3` instead of `pip`. If neither works, try `python3 -m pip install -r requirements.txt` instead.
-- **Windows:** Use `python -m pip install -r requirements.txt` instead.
-- Make sure your virtual environment is activated first (you should see `(venv)` in your prompt).
-
----
-
-### "npm: command not found" or "node: command not found"
-
-**Symptom:** `npm install` or `node --version` gives "command not found".
-
-**Fix:** Install Node.js from https://nodejs.org/ (choose the LTS version). After installing, **close and reopen your terminal**. Both `node` and `npm` should then work.
-
----
-
-### PowerShell says "running scripts is disabled"
-
-**Symptom:** On Windows PowerShell, activating the virtual environment gives an error about execution policy.
-
-**Fix:** Run this command, then try activating again:
 ```bash
-Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+python --version
+python3.13 --version
 ```
 
----
+The backend is designed for Python 3.13. If `python3.13` is not found, install Python 3.13 and recreate the virtual environment:
 
-### "No module named venv"
-
-**Symptom:** `python3 -m venv venv` fails with `No module named venv`.
-
-**Fix:** Your Python installation might be missing the venv module. On Ubuntu/Debian Linux, install it with:
 ```bash
-sudo apt install python3-venv
-```
-On other systems, reinstall Python from https://www.python.org/downloads/.
-
----
-
-### npm install takes forever or fails with network errors
-
-**Symptom:** `npm install` hangs or shows ETIMEDOUT / ECONNRESET errors.
-
-**Fix:**
-1. Check your internet connection
-2. If you're behind a corporate firewall or VPN, try disconnecting temporarily
-3. Clear npm cache and retry: `npm cache clean --force && npm install`
-4. If on slow internet, be patient -- it may take up to 5 minutes
-
----
-
-### Python 3.14+ / pydantic-core build fails (PyO3 error)
-
-**Symptom:** When running `pip install -r requirements.txt`, you see an error like:
-```
-error: the configured Python interpreter version (3.14) is newer than PyO3's maximum supported version (3.13)
-```
-or:
-```
-Failed building wheel for pydantic-core
+python3.13 -m venv .venv
+source .venv/bin/activate
 ```
 
-**Why:** Python 3.14 is very new. The `pydantic-core` package uses Rust bindings (PyO3) that don't support Python 3.14 yet.
+On Windows:
 
-**Fix (Recommended):** Use Python 3.13 instead:
+```powershell
+py -3.13 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
 
-- **macOS:**
-  ```bash
-  brew install python@3.13
-  cd backend
-  rm -rf venv
-  python3.13 -m venv venv
-  source venv/bin/activate
-  pip install -r requirements.txt
-  ```
+## Virtual Environment Is Not Active
 
-- **Windows:**
-  Download Python 3.13 from https://www.python.org/downloads/ and install it (check "Add to PATH"). Then:
-  ```bash
-  cd backend
-  rmdir /s /q venv
-  py -3.13 -m venv venv
-  venv\Scripts\activate
-  pip install -r requirements.txt
-  ```
+If imports fail after installation, make sure the virtual environment is active.
 
-**Alternative (Quick workaround):** Force build with ABI3 compatibility (may have other issues):
+macOS:
+
 ```bash
-PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 pip install -r requirements.txt
+source .venv/bin/activate
 ```
 
----
+Windows:
 
-### "ModuleNotFoundError: No module named 'enterprise'"
-
-**Symptom:** When starting the backend or importing litellm, you see:
-```
-ModuleNotFoundError: No module named 'enterprise'
-```
-or:
-```
-ModuleNotFoundError: No module named 'litellm.proxy.enterprise'
+```powershell
+.\.venv\Scripts\Activate.ps1
 ```
 
-**Why:** Certain versions of litellm (1.67.3, 1.67.4, 1.68.1, 1.68.2) accidentally introduced an import for an enterprise-only package that isn't included in the open-source PyPI release. This is a known upstream bug ([GitHub issue #10349](https://github.com/BerriAI/litellm/issues/10349)).
+You should see `(.venv)` in your terminal prompt.
 
-**Fix:** The project's `requirements.txt` already pins a working version (`litellm==1.67.2`). If you're seeing this error, you may have installed a different version. Run:
+## Missing Python Modules
+
+Error examples:
+
+```text
+ModuleNotFoundError: No module named 'fastapi'
+ModuleNotFoundError: No module named 'litellm'
+```
+
+Fix:
+
 ```bash
-pip install litellm==1.67.2
+python -m pip install --upgrade pip
+pip install -r backend/requirements.txt
 ```
 
-To verify you have the correct version:
+## Uvicorn Import Errors
+
+Run the backend from the project root:
+
 ```bash
-pip show litellm | grep Version
-```
-It should show `Version: 1.67.2`.
-
-If you previously ran `pip install litellm` without a version (which installs the latest), that's likely how the broken version got installed. Always use `pip install -r requirements.txt` to get the pinned versions.
-
----
-
-### "No module named 'cgi'" (Python 3.13+)
-
-**Symptom:** When importing litellm, you see:
-```
-ModuleNotFoundError: No module named 'cgi'
+uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-**Why:** Python 3.13 removed the deprecated `cgi` module. Some older litellm versions depend on it.
+If you run the command from inside `backend/`, Python may not resolve the package the same way.
 
-**Fix:** Make sure you're using the pinned version:
+## Port 8000 Is Already In Use
+
+Start the backend on another port:
+
 ```bash
-pip install litellm==1.67.2
+uvicorn backend.app.main:app --reload --port 8001
 ```
 
----
+Then create `frontend/.env.local`:
 
-## Backend Issues
-
-### Backend won't start / ModuleNotFoundError
-
-**Symptom:** `ModuleNotFoundError: No module named 'fastapi'` (or any other module) when running `python3 main.py`.
-
-**Why:** The Python dependencies aren't installed, or the virtual environment isn't active.
-
-**Fix:**
-1. Make sure you're in the `backend` folder: `cd backend`
-2. Activate the virtual environment:
-   - macOS/Linux: `source venv/bin/activate`
-   - Windows: `venv\Scripts\activate`
-3. You should see `(venv)` at the start of your prompt
-4. Install dependencies: `pip3 install -r requirements.txt` (Mac/Linux) or `pip install -r requirements.txt` (Windows)
-5. Try starting the backend again: `python3 main.py` (Mac/Linux) or `python main.py` (Windows)
-
----
-
-### Missing .env file / "No API keys configured"
-
-**Symptom:** The backend starts but no models work, or you see warnings about missing API keys in the terminal.
-
-**Why:** You haven't created the `.env` file yet, or it's in the wrong location.
-
-**Fix:**
-1. Make sure you're in the `backend` folder
-2. Copy the example file: `cp .env.example .env` (Mac/Linux) or `copy .env.example .env` (Windows)
-3. Open `.env` in a text editor and add at least one API key
-4. Restart the backend (Ctrl+C, then `python3 main.py` again)
-
-The `.env` file must be in the `backend/` folder (same folder as `main.py`).
-
----
-
-### Invalid or expired API key errors
-
-**Symptom:** During a debate, you see errors like:
-```
-AuthenticationError: Invalid API key
-```
-or:
-```
-Error: 401 Unauthorized
-```
-or:
-```
-RateLimitError: You exceeded your current quota
+```text
+NEXT_PUBLIC_API_URL=http://localhost:8001
+NEXT_PUBLIC_WS_URL=ws://localhost:8001
 ```
 
-**Why:** Your API key is wrong, expired, or out of credits.
+Restart the frontend after changing frontend environment variables.
 
-**Fix:**
-1. Double-check your API key in `backend/.env` -- make sure there are **no extra spaces** before or after the key
-2. Make sure the key is on the correct line (e.g., OpenAI key goes on the `OPENAI_API_KEY=` line, not the `ANTHROPIC_API_KEY=` line)
-3. Verify the key works by logging into the provider's dashboard:
-   - OpenAI: https://platform.openai.com/api-keys
-   - Anthropic: https://console.anthropic.com/settings/keys
-   - Google: https://aistudio.google.com/apikey
-   - Groq: https://console.groq.com/keys
-   - MiniMax: https://platform.minimaxi.com/
-   - Moonshot: https://platform.moonshot.cn/console/api-keys
-4. Check if you have billing/credits set up -- most providers require a payment method
-5. After fixing the key, **restart the backend** (Ctrl+C, then start again)
+## Port 6001 Is Already In Use
 
----
+Next.js may offer another port automatically. You can also choose one:
 
-### "Address already in use" (port 8000)
-
-**Symptom:** Backend fails to start with `[Errno 48] Address already in use` or similar.
-
-**Why:** Something else is already using port 8000, or a previous instance of the backend is still running.
-
-**Fix:**
-1. Check if you have another terminal running the backend -- if so, stop it with `Ctrl+C` first
-2. Find and kill the process using port 8000:
-   - macOS/Linux: `lsof -i :8000` then `kill <PID>`
-   - Windows: `netstat -ano | findstr :8000` then `taskkill /PID <PID> /F`
-
----
-
-### "Address already in use" (port 3000)
-
-**Symptom:** Frontend fails to start with port 3000 already in use.
-
-**Fix:** Same approach as port 8000 above, but for port 3000:
-- macOS/Linux: `lsof -i :3000` then `kill <PID>`
-- Windows: `netstat -ano | findstr :3000` then `taskkill /PID <PID> /F`
-
----
-
-### Database locked errors
-
-**Symptom:** `database is locked` error in backend logs.
-
-**Fix:**
-1. Make sure only one instance of the backend is running
-2. If the issue persists, stop the backend, delete `backend/debate_council.db`, then restart
-
----
-
-### Database corrupted / SQLite errors
-
-**Symptom:** Errors like `sqlite3.DatabaseError: database disk image is malformed` or `OperationalError: no such table`.
-
-**Fix:** Delete the database file and restart. The backend will recreate it automatically:
-- macOS/Linux: `rm backend/debate_council.db`
-- Windows: `del backend\debate_council.db`
-
-Note: this will delete all saved debate sessions.
-
----
-
-### CORS errors in browser console
-
-**Symptom:** Browser console shows errors like:
-```
-Access to fetch at 'http://localhost:8000' from origin 'http://localhost:3000' has been blocked by CORS policy
+```bash
+cd frontend
+npm run dev -- -p 6001
 ```
 
-**Why:** This usually means the backend isn't running, or a browser extension is interfering.
+If the frontend origin changes, update `.env`:
 
-**Fix:**
-1. Make sure the backend is running on port 8000
-2. Try disabling browser extensions (especially ad blockers or privacy extensions) temporarily
-3. Try a different browser or incognito/private window
-4. If the issue persists, clear your browser cache
+```text
+CORS_ORIGINS=http://localhost:6001
+FRONTEND_ORIGIN=http://localhost:6001
+```
 
----
+Restart the backend.
 
-## Frontend Issues
+## API Keys Are Not Detected
 
-### Frontend shows "Failed to connect to backend"
+Open:
 
-**Symptom:** Red error banner at top of page when you open http://localhost:3000.
+```text
+http://localhost:8000/api/models
+```
 
-**Fix:**
-1. Make sure the backend is running in another terminal (you should see the Uvicorn log output)
-2. Make sure the backend is on port 8000 (check the Uvicorn output)
-3. If you changed the backend port, update `NEXT_PUBLIC_API_URL` in `frontend/.env.local`
-4. Try refreshing the page
+If a provider says it is not configured:
 
----
+- Confirm `.env` exists at the project root or `backend/.env`.
+- Confirm the key name is exact, such as `OPENAI_API_KEY`.
+- Restart the backend after editing `.env`.
+- Do not put quotes around the key unless they are part of the key.
+- Do not put model names in `.env`.
 
-### WebSocket connection failed
+## No Models Appear In The Dropdown
 
-**Symptom:** "WebSocket connection failed. Is the backend running?" when starting a debate.
+`GET /api/models` returns only unlocked models in the `models` array. Add at least one provider key for real debates.
 
-**Fix:**
-1. Verify the backend is running (check the other terminal)
-2. Try refreshing the browser page
-3. If using a VPN, firewall, or proxy, ensure WebSocket connections are allowed on port 8000
-4. Check browser console (F12 > Console tab) for detailed error messages
+Examples:
 
----
+- `OPENAI_API_KEY` alone unlocks 4 OpenAI models.
+- `ANTHROPIC_API_KEY` alone unlocks 4 Anthropic models.
+- `OPENAI_API_KEY` plus `ANTHROPIC_API_KEY` unlocks 8 models.
+- All 6 provider keys unlock all 21 models.
 
-### Page is blank or shows errors
+If no provider keys are set, the real model dropdown is empty and debates cannot start.
 
-**Symptom:** http://localhost:3000 shows a blank page or React error overlay.
+## "Choose One Unlocked Model"
 
-**Fix:**
-1. Open browser DevTools (F12) and check the Console tab for errors
-2. Make sure `npm install` completed successfully (no errors)
-3. Try stopping the frontend (`Ctrl+C`) and running `npm run dev` again
-4. If that doesn't help, delete `frontend/node_modules` and `frontend/.next`, then run `npm install` and `npm run dev` again:
-   ```bash
-   rm -rf node_modules .next    # Mac/Linux
-   # rmdir /s /q node_modules .next   # Windows
-   npm install
-   npm run dev
-   ```
+The user must select one Overall Model from the dropdown before sending a message. By default, Pro and Con team agents, the Council Assistant, the optional Judge Assistant, and the Judge use that model. In Chat Settings, each chat can override model, temperature, max tokens, and response length per agent role.
 
----
+For UI testing without real APIs:
 
-### Frontend build errors / "Module not found"
+```text
+MOCK_LLM_RESPONSES=true
+```
 
-**Symptom:** `npm run dev` fails with errors like `Module not found: Can't resolve '...'` or TypeScript errors.
+Restart the backend.
 
-**Fix:**
-1. Make sure you ran `npm install` first
-2. Delete `node_modules` and reinstall:
-   ```bash
-   rm -rf node_modules    # Mac/Linux
-   # rmdir /s /q node_modules   # Windows
-   npm install
-   ```
-3. If the error mentions a specific missing package, install it: `npm install <package-name>`
-4. Make sure you're using Node.js 18 or higher: `node --version`
+## LiteLLM Provider Errors
 
----
+Errors from model providers can look like authentication failures, quota errors, model-not-found errors, or rate limits.
 
-### "EACCES permission denied" during npm install
+Check:
 
-**Symptom:** `npm install` fails with permission errors on Mac/Linux.
+- The API key is valid and has quota.
+- The provider account has access to the requested model.
+- The model name in `backend/app/model_registry.py` matches the provider and LiteLLM route.
+- Your network can reach the provider API.
 
-**Fix:**
-- **Don't use `sudo npm install`** (this can cause more problems). Instead, fix npm permissions:
-  ```bash
-  sudo chown -R $(whoami) ~/.npm
-  ```
-- Then retry: `npm install`
+## CORS Errors
 
----
+Browser console examples:
 
-## Debate Issues
+```text
+Access to fetch at 'http://localhost:8000' from origin 'http://localhost:6001' has been blocked by CORS policy
+```
 
-### Model API errors during debate
+Fix `.env`:
 
-**Symptom:** `[Model error: ...]` appears in debate messages instead of debater responses.
+```text
+CORS_ORIGINS=http://localhost:6001
+FRONTEND_ORIGIN=http://localhost:6001
+```
 
-**Fix:**
-1. Check that the correct API key is set in `backend/.env` for the model you selected
-2. Verify your API key has sufficient credits/quota
-3. Some models may have rate limits -- try again after a moment
-4. Check the backend terminal for detailed error messages
-5. Try a different model
+For multiple origins:
 
----
+```text
+CORS_ORIGINS=http://localhost:6001,http://127.0.0.1:6001
+```
 
-### "Maximum 10 chat sessions reached"
+Restart the backend.
 
-**Symptom:** Can't create new sessions.
+## WebSocket Connection Failed
 
-**Fix:** Delete existing sessions you no longer need. Click the trash icon on any session in the sidebar.
+Check:
 
----
+- Backend is running.
+- Frontend `NEXT_PUBLIC_WS_URL` points to the backend WebSocket origin.
+- Browser can reach `ws://localhost:8000/ws/debates/{session_id}`.
+- Reverse proxies are configured to allow WebSocket upgrades.
 
-### "Maximum concurrent debates (3) reached"
+If the backend port changed to `8001`, set:
 
-**Symptom:** Can't start a new debate while others are running.
+```text
+NEXT_PUBLIC_WS_URL=ws://localhost:8001
+```
 
-**Fix:** Wait for one of the active debates to complete, or refresh the page if a debate seems stuck.
+## SQLite Database Issues
 
----
+Default database path:
 
-### Debate gets stuck / hangs mid-response
+```text
+backend/data/debate_council.db
+```
 
-**Symptom:** A debate stops streaming and nothing happens for over a minute.
+If the database folder is missing, the backend creates it automatically.
 
-**Fix:**
-1. Check the backend terminal for timeout or API errors
-2. Some larger models (like GPT-5.4-pro) may take 30+ seconds per response -- be patient
-3. If truly stuck, refresh the page, delete the stuck session, and create a new one
+If you want a fresh local database, stop the backend and delete the database files:
 
----
+```bash
+rm -f backend/data/debate_council.db backend/data/debate_council.db-shm backend/data/debate_council.db-wal
+```
 
-### LiteLLM model not found
+On Windows PowerShell:
 
-**Symptom:** Error like `litellm.exceptions.BadRequestError: ... model not found`.
+```powershell
+Remove-Item backend\data\debate_council.db* -ErrorAction SilentlyContinue
+```
 
-**Fix:**
-1. The model may not be available with your API key tier
-2. Try a different model (e.g., switch from gpt-5.4-pro to gpt-4o)
-3. Check [LiteLLM docs](https://docs.litellm.ai/docs/providers) for supported models
+Then restart the backend.
 
----
+## Session Limit
 
-### Wrong model responds / model mismatch
+The app allows 10 sessions at a time. If you get a limit error, delete a session before creating another.
 
-**Symptom:** You selected one model but the responses seem to come from a different one.
+Session numbers are not reused while any session still exists. If all sessions are deleted, the next created session is `Debate Session #1`.
 
-**Why:** This shouldn't happen with the current architecture. Each model name maps to a specific LiteLLM provider string in `backend/models.py`.
+## Active Debate Limit
 
-**Fix:**
-1. Check the backend terminal for the actual model being called
-2. Restart the backend to ensure it picks up the latest code
-3. If the issue persists, open a GitHub issue
+The backend allows 3 active debates at the same time. If a fourth starts, the backend returns an error. Wait for one debate to finish and try again.
 
----
+This limit is process-local. In production, use a single worker or move active-debate tracking to shared storage such as Redis.
 
-### Session numbering seems off
+## Node or npm Issues
 
-**Info:** This is by design. Session numbers always increment and never reuse numbers. Example: if you create sessions #1 through #5, then delete #3, the next new session will be #6 (not #3). The counter only resets to #1 when **all** sessions are deleted.
+Check versions:
 
----
+```bash
+node --version
+npm --version
+```
 
-## Quick Reference: Common Fixes
+Use Node.js 20 or newer. Then reinstall frontend dependencies:
 
-| Problem | Quick Fix |
-|---------|-----------|
-| `python: command not found` | Use `python3` on Mac. Install Python on Windows (check "Add to PATH"). |
-| `pip: command not found` | Use `pip3` on Mac, or `python3 -m pip` |
-| `npm: command not found` | Install Node.js from https://nodejs.org/ |
-| `No module named 'enterprise'` | `pip install litellm==1.67.2` |
-| `No module named 'fastapi'` | Activate venv, then `pip install -r requirements.txt` |
-| Missing .env file | `cp .env.example .env` and add your API keys |
-| API key errors (401) | Check key in `.env`, verify on provider dashboard |
-| Port already in use | Kill the process: `lsof -i :8000` then `kill <PID>` |
-| Database errors | Delete `debate_council.db` and restart |
-| Frontend blank page | Delete `node_modules` and `.next`, then `npm install` |
-| PyO3 / Python 3.14 error | Use Python 3.13 instead |
+```bash
+cd frontend
+rm -rf node_modules package-lock.json
+npm install
+```
 
----
+On Windows PowerShell:
 
-## Still Having Issues?
+```powershell
+cd frontend
+Remove-Item node_modules -Recurse -Force -ErrorAction SilentlyContinue
+Remove-Item package-lock.json -ErrorAction SilentlyContinue
+npm install
+```
 
-1. **Check the backend terminal** for detailed error logs -- most errors show up there
-2. **Open browser DevTools** (press F12) and check the Console and Network tabs
-3. **Search existing issues** on [GitHub](https://github.com/Evan1108-Coder/AI-Debate-Council/issues)
-4. **Open a new issue** if your problem isn't listed
+## Frontend Build Errors
+
+Run:
+
+```bash
+cd frontend
+npm run build
+```
+
+Common fixes:
+
+- Run `npm install`.
+- Delete `frontend/.next` and build again.
+- Confirm `frontend/tsconfig.json` includes the `@/*` path alias.
+- Restart the dev server after changing `.env.local`.
+
+## Tailwind Styles Do Not Load
+
+Check these files exist:
+
+- `frontend/app/globals.css`
+- `frontend/tailwind.config.ts`
+- `frontend/postcss.config.mjs`
+
+Restart the frontend dev server.
+
+## Windows PowerShell Blocks Activation
+
+Run:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+```
+
+Then activate again:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+## macOS `python3.13` Not Found
+
+If Homebrew installed Python but the command is missing:
+
+```bash
+brew info python@3.13
+```
+
+Follow the PATH instructions shown by Homebrew, then open a new terminal.
+
+## Backend Starts But Frontend Shows No Sessions
+
+Check:
+
+- `http://localhost:8000/health` returns `{"status":"ok"}`.
+- Browser devtools Network tab can reach `/api/sessions`.
+- `CORS_ORIGINS` includes the frontend origin.
+- The backend terminal does not show database permission errors.
+
+## Real Providers Are Slow
+
+The debate uses multiple streamed model calls. You can reduce turns:
+
+```text
+DEBATE_ROUNDS=1
+```
+
+Restart the backend.

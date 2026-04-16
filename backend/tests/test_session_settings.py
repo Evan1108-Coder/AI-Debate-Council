@@ -1,0 +1,215 @@
+from pathlib import Path
+import sqlite3
+from tempfile import TemporaryDirectory
+import unittest
+
+from backend.app.database import Database
+
+
+class SessionSettingsTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp_dir = TemporaryDirectory()
+        self.db = Database(Path(self.temp_dir.name) / "test.db")
+        self.db.init()
+
+    def tearDown(self) -> None:
+        self.temp_dir.cleanup()
+
+    def test_settings_are_unique_per_chat(self) -> None:
+        first = self.db.create_session(max_sessions=10)
+        second = self.db.create_session(max_sessions=10)
+
+        updated = self.db.update_session_settings(
+            first["id"],
+            {
+                "overall_model": "gpt-4o",
+                "temperature": 0.1,
+                "debate_rounds": 6,
+                "show_timestamps": True,
+            },
+        )
+        other = self.db.get_session_settings(second["id"])
+
+        self.assertEqual(updated["overall_model"], "gpt-4o")
+        self.assertEqual(updated["debaters_per_team"], 3)
+        self.assertTrue(updated["judge_assistant_enabled"])
+        self.assertIn("council_assistant", updated["agent_settings"])
+        self.assertIn("lead_advocate", updated["agent_settings"])
+        self.assertEqual(updated["temperature"], 0.1)
+        self.assertEqual(updated["debate_rounds"], 6)
+        self.assertTrue(updated["show_timestamps"])
+        self.assertEqual(other["overall_model"], "")
+        self.assertNotEqual(other["temperature"], 0.1)
+        self.assertFalse(other["show_timestamps"])
+
+    def test_settings_are_clamped_to_safe_ranges(self) -> None:
+        session = self.db.create_session(max_sessions=10)
+
+        updated = self.db.update_session_settings(
+            session["id"],
+            {
+                "temperature": 3,
+                "max_tokens": 9999,
+                "debate_rounds": 99,
+                "context_window": -1,
+                "debaters_per_team": 99,
+                "agent_settings": {
+                    "council_assistant": {"always_on": True},
+                    "lead_advocate": {
+                        "temperature": -1,
+                        "max_tokens": 9999,
+                        "response_length": "Huge",
+                    }
+                },
+            },
+        )
+
+        self.assertEqual(updated["temperature"], 1.0)
+        self.assertEqual(updated["max_tokens"], 2000)
+        self.assertEqual(updated["debate_rounds"], 6)
+        self.assertEqual(updated["context_window"], 0)
+        self.assertEqual(updated["debaters_per_team"], 4)
+        self.assertTrue(updated["agent_settings"]["council_assistant"]["always_on"])
+        self.assertEqual(updated["agent_settings"]["lead_advocate"]["temperature"], 0.0)
+        self.assertEqual(updated["agent_settings"]["lead_advocate"]["max_tokens"], 2000)
+        self.assertEqual(updated["agent_settings"]["lead_advocate"]["response_length"], "Normal")
+
+    def test_existing_settings_table_is_migrated_for_overall_model(self) -> None:
+        legacy_path = Path(self.temp_dir.name) / "legacy.db"
+        connection = sqlite3.connect(legacy_path)
+        connection.executescript(
+            """
+            CREATE TABLE app_metadata (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            CREATE TABLE sessions (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                default_index INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE session_settings (
+                session_id TEXT PRIMARY KEY,
+                role_models TEXT NOT NULL,
+                temperature REAL NOT NULL,
+                max_tokens INTEGER NOT NULL,
+                debate_tone TEXT NOT NULL,
+                language TEXT NOT NULL,
+                response_length TEXT NOT NULL,
+                auto_scroll INTEGER NOT NULL,
+                show_timestamps INTEGER NOT NULL,
+                show_token_count INTEGER NOT NULL,
+                context_window INTEGER NOT NULL,
+                debate_rounds INTEGER NOT NULL,
+                researcher_web_search INTEGER NOT NULL,
+                fact_check_mode INTEGER NOT NULL,
+                export_format TEXT NOT NULL,
+                auto_save_interval INTEGER NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            """
+        )
+        connection.close()
+
+        migrated = Database(legacy_path)
+        migrated.init()
+        session = migrated.create_session(max_sessions=10)
+        settings = migrated.get_session_settings(session["id"])
+
+        self.assertEqual(settings["overall_model"], "")
+        self.assertEqual(settings["debaters_per_team"], 3)
+        self.assertTrue(settings["judge_assistant_enabled"])
+        self.assertIn("council_assistant", settings["agent_settings"])
+        self.assertIn("judge", settings["agent_settings"])
+
+    def test_clear_history_hides_visible_messages_but_keeps_memory(self) -> None:
+        session = self.db.create_session(max_sessions=10)
+        debate = self.db.create_debate(session["id"], "Should AI debates be saved?")
+        self.db.add_message(
+            session_id=session["id"],
+            debate_id=debate["id"],
+            role="user",
+            speaker="You",
+            model="user",
+            content="Please debate this.",
+        )
+        self.db.add_message(
+            session_id=session["id"],
+            debate_id=debate["id"],
+            role="assistant",
+            speaker="Council Assistant",
+            model="mock",
+            content="Saved memory.",
+        )
+
+        self.assertTrue(self.db.clear_visible_history(session["id"]))
+
+        self.assertEqual(self.db.list_messages(session["id"]), [])
+        self.assertEqual(self.db.list_debates(session["id"]), [])
+        self.assertEqual(len(self.db.list_messages(session["id"], include_hidden=True)), 2)
+        self.assertEqual(len(self.db.list_debates(session["id"], include_hidden=True)), 1)
+
+    def test_clear_memory_removes_visible_history_and_memory(self) -> None:
+        session = self.db.create_session(max_sessions=10)
+        debate = self.db.create_debate(session["id"], "Should AI debates be saved?")
+        self.db.add_message(
+            session_id=session["id"],
+            debate_id=debate["id"],
+            role="user",
+            speaker="You",
+            model="user",
+            content="Please debate this.",
+        )
+
+        self.assertTrue(self.db.clear_memory(session["id"]))
+
+        self.assertEqual(self.db.list_messages(session["id"], include_hidden=True), [])
+        self.assertEqual(self.db.list_debates(session["id"], include_hidden=True), [])
+
+    def test_debate_names_increment_and_chat_records_are_not_listed_as_debates(self) -> None:
+        session = self.db.create_session(max_sessions=10)
+        first = self.db.create_debate(session["id"], "First debate")
+        chat = self.db.create_debate(session["id"], "Normal chat", mode="chat")
+        second = self.db.create_debate(session["id"], "Second debate")
+
+        debates = self.db.list_debates(session["id"])
+
+        self.assertEqual(first["name"], "Debate #1")
+        self.assertEqual(chat["name"], "Council Assistant Chat")
+        self.assertEqual(second["name"], "Debate #2")
+        self.assertEqual([debate["id"] for debate in debates], [second["id"], first["id"]])
+
+    def test_hiding_debate_statistics_keeps_chat_messages_visible(self) -> None:
+        session = self.db.create_session(max_sessions=10)
+        first = self.db.create_debate(session["id"], "First debate")
+        self.db.add_message(
+            session_id=session["id"],
+            debate_id=first["id"],
+            role="pro_lead_advocate",
+            speaker="Pro Lead Advocate",
+            model="mock",
+            content="Visible transcript remains.",
+        )
+
+        self.assertTrue(self.db.hide_debate_statistics(session["id"], first["id"]))
+
+        self.assertEqual(self.db.list_debates(session["id"]), [])
+        self.assertEqual(len(self.db.list_messages(session["id"])), 1)
+
+        reset = self.db.create_debate(session["id"], "Reset debate counter")
+        self.assertEqual(reset["name"], "Debate #1")
+
+    def test_renaming_debate_changes_statistics_record(self) -> None:
+        session = self.db.create_session(max_sessions=10)
+        debate = self.db.create_debate(session["id"], "First debate")
+
+        renamed = self.db.rename_debate(session["id"], debate["id"], "Policy Round")
+
+        self.assertIsNotNone(renamed)
+        self.assertEqual(renamed["name"], "Policy Round")
+
+
+if __name__ == "__main__":
+    unittest.main()

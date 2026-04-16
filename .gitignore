@@ -1,26 +1,43 @@
-# Dependencies
-node_modules/
-backend/venv/
-__pycache__/
-
-# Environment
+# Environment files
 .env
 backend/.env
 frontend/.env.local
+frontend/.env.development.local
+frontend/.env.test.local
+frontend/.env.production.local
 
-# Database
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# SQLite
+backend/data/
 *.db
+*.db-shm
+*.db-wal
 
-# Build
+# Node and Next.js
+node_modules/
+frontend/node_modules/
 frontend/.next/
 frontend/out/
+frontend/.turbo/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# OS
+# OS and editor
 .DS_Store
 Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
