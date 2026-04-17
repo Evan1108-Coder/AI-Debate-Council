@@ -6,8 +6,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from .analytics import analyze_debate
 from .config import settings
 from .database import Database
-from .debate import DebateError, DebateManager
+from .debate import ClientDisconnectedError, DebateError, DebateManager
 from .model_registry import available_model_payloads, available_models, provider_summaries
+from .runtime_diary import runtime_diary
 from .schemas import (
     ChatSession,
     DebateMessage,
@@ -22,9 +23,26 @@ db = Database(settings.database_path)
 debate_manager = DebateManager(db)
 
 
+async def safe_send_json(websocket: WebSocket, payload: dict) -> bool:
+    try:
+        await websocket.send_json(payload)
+        return True
+    except WebSocketDisconnect:
+        return False
+    except RuntimeError as exc:
+        if "Cannot call \"send\" once a close message has been sent" in str(exc):
+            return False
+        raise
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     db.init()
+    runtime_diary.record(
+        "backend terminal",
+        "startup",
+        f"{settings.app_name} backend started. Database path: {settings.database_path}",
+    )
     yield
 
 
@@ -63,6 +81,16 @@ def models() -> dict:
         "selection_required": True,
         "mock_mode": settings.mock_llm,
     }
+
+
+@app.post("/api/runtime-diary")
+def record_runtime_diary(payload: dict) -> dict:
+    source = str(payload.get("source") or "frontend/browser")
+    event = str(payload.get("event") or "event")
+    detail = str(payload.get("detail") or "")
+    session_id = str(payload.get("session_id") or "").strip() or None
+    runtime_diary.record(source, event, detail, session_id=session_id)
+    return {"ok": True}
 
 
 @app.get("/api/sessions", response_model=list[ChatSession])
@@ -235,7 +263,7 @@ async def debate_socket(websocket: WebSocket, session_id: str):
     await websocket.accept()
 
     if not db.get_session(session_id):
-        await websocket.send_json({"type": "error", "message": "Session not found."})
+        await safe_send_json(websocket, {"type": "error", "message": "Session not found."})
         await websocket.close(code=1008)
         return
 
@@ -243,22 +271,29 @@ async def debate_socket(websocket: WebSocket, session_id: str):
         while True:
             payload = await websocket.receive_json()
             if payload.get("type") not in {"start_debate", "start_interaction"}:
-                await websocket.send_json(
+                if not await safe_send_json(
+                    websocket,
                     {"type": "error", "message": "Unknown WebSocket event type."}
-                )
+                ):
+                    return
                 continue
 
             topic = str(payload.get("topic", "")).strip()
             selected_model = str(payload.get("model", "")).strip()
             try:
                 await debate_manager.run_interaction(websocket, session_id, topic, selected_model)
+            except ClientDisconnectedError:
+                return
             except DebateError as exc:
-                await websocket.send_json({"type": "error", "message": str(exc)})
+                if not await safe_send_json(websocket, {"type": "error", "message": str(exc)}):
+                    return
             except WebSocketDisconnect:
                 raise
             except Exception as exc:
-                await websocket.send_json(
-                    {"type": "error", "message": f"Debate failed: {exc}"}
-                )
+                if not await safe_send_json(
+                    websocket,
+                    {"type": "error", "message": f"Debate failed: {exc}"},
+                ):
+                    return
     except WebSocketDisconnect:
         return

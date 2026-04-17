@@ -420,23 +420,25 @@ def _bayesian_aggregation(
 
 def _argument_graph(turns: list[dict[str, Any]]) -> dict[str, Any]:
     nodes = []
+    token_sets: dict[str, set[str]] = {}
     for index, turn in enumerate(turns, start=1):
         claim_text = turn["claims"][0] if turn["claims"] else _clip(turn["content"])
+        node_id = f"c{index}"
         nodes.append(
             {
-                "id": f"c{index}",
+                "id": node_id,
                 "speaker": turn["speaker"],
                 "stance": turn["stance"],
                 "text": claim_text,
-                "tokens": set(_tokens(claim_text)),
                 "strength": turn["confidence"] * turn["novelty"] * turn["credibility"],
             }
         )
+        token_sets[node_id] = set(_tokens(claim_text))
 
     edges = []
     for left_index, left in enumerate(nodes):
         for right in nodes[left_index + 1 :]:
-            similarity = _jaccard(left["tokens"], right["tokens"])
+            similarity = _jaccard(token_sets[left["id"]], token_sets[right["id"]])
             if similarity < 0.12:
                 continue
             relation = "support" if left["stance"] == right["stance"] else "attack"

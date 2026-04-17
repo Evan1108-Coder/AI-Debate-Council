@@ -76,8 +76,10 @@ See [ENVREADME.md](ENVREADME.md) for the full list of 21 models across 6 provide
 ### Step 7: Start the Backend
 
 ```bash
-uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8000
+.venv/bin/python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
 ```
+
+This command deliberately uses the Python inside `.venv`, so it still works if your terminal says `uvicorn: command not found`.
 
 Verify it works:
 
@@ -184,8 +186,10 @@ Open `.env` in any text editor (Notepad, VS Code, etc.) and add at least one pro
 ### Step 8: Start the Backend
 
 ```powershell
-uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8000
+.\.venv\Scripts\python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
 ```
+
+This uses the Uvicorn package installed inside the project's virtual environment instead of relying on a global `uvicorn` command.
 
 Verify: Open `http://localhost:8000/health` in your browser.
 

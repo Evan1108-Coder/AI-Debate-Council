@@ -14,6 +14,7 @@ export type DebateMessage = {
   speaker: string;
   model: string;
   content: string;
+  cost_summary: CostSummary | null;
   sequence: number;
   created_at: string;
 };
@@ -42,6 +43,9 @@ export type SessionSettings = {
   auto_scroll: boolean;
   show_timestamps: boolean;
   show_token_count: boolean;
+  show_money_cost: boolean;
+  cost_currency: string;
+  show_model_costs: boolean;
   context_window: number;
   debate_rounds: number;
   researcher_web_search: boolean;
@@ -49,6 +53,27 @@ export type SessionSettings = {
   export_format: string;
   auto_save_interval: number;
   updated_at?: string;
+};
+
+export type CostSummary = {
+  currency: string;
+  total: number;
+  total_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  calls: number;
+  estimated: boolean;
+  rate_source: string;
+  models: Array<{
+    model: string;
+    input_tokens: number;
+    output_tokens: number;
+    calls: number;
+    cost: number;
+    cost_usd: number;
+    input_usd_per_1m: number;
+    output_usd_per_1m: number;
+  }>;
 };
 
 export type SupportedModel = {
@@ -205,6 +230,11 @@ export type DebateEvent =
       delta: string;
     }
   | {
+      type: "message_replaced";
+      stream_id: string;
+      content: string;
+    }
+  | {
       type: "message_completed";
       stream_id: string;
       message: DebateMessage;
@@ -219,11 +249,13 @@ export type DebateEvent =
       debate_id: string;
       judge_summary: string;
       active_debates: number;
+      cost_summary?: CostSummary;
     }
   | {
       type: "interaction_completed";
       mode: "chat";
       debate_id: string;
+      cost_summary?: CostSummary;
     }
   | {
       type: "error";

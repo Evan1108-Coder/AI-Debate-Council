@@ -41,19 +41,20 @@ The frontend calls `GET /api/models` and uses the returned `models` array for al
 | --- | --- | --- | --- |
 | `DATABASE_PATH` | No | `backend/data/debate_council.db` | Path to the SQLite database file. Relative paths resolve from the project root. The backend creates the directory and file automatically if they do not exist. |
 | `FRONTEND_ORIGIN` | No | `http://localhost:6001` | Convenience origin for CORS when `CORS_ORIGINS` is not set. |
-| `CORS_ORIGINS` | No | `http://localhost:6001` | Comma-separated list of frontend origins allowed to call the backend. The backend automatically adds both `localhost` and `127.0.0.1` variants, plus a regex that matches any localhost port. |
+| `CORS_ORIGINS` | No | `http://localhost:6001` | Comma-separated list of frontend origins allowed to call the backend. The backend automatically adds both `localhost` and `127.0.0.1` variants. |
+| `ALLOW_LOCALHOST_PORTS` | No | `false` | Set to `true` only for local development when you want to allow browser requests from any localhost or 127.0.0.1 port. Keep it `false` for sharing or production-like testing. |
 | `DEBATE_ROUNDS` | No | `2` | Default number of debate rounds before the judge summary. Each round consists of one turn per active debater. With 3 debaters per team (6 total agents), 2 rounds means 12 debater turns. Users can override this per chat in Chat Settings (1–6). |
 | `LITELLM_TIMEOUT_SECONDS` | No | `120` | Timeout in seconds for each model call through LiteLLM. Applies to both streamed debate turns and non-streamed moderator/classifier calls (capped at 30 seconds for those). |
 | `MOCK_LLM_RESPONSES` | No | `false` | Set to `true` to stream local fake responses without any API keys. Useful for UI development and testing. When enabled and no real provider keys are set, a `mock-debate-model` appears in the dropdown. |
 
 ### Notes on CORS
 
-The backend is generous with CORS for local development:
+The backend is intentionally narrow with CORS by default:
 
 - `CORS_ORIGINS` and `FRONTEND_ORIGIN` values are used as explicit allowed origins.
 - For each origin containing `localhost`, a `127.0.0.1` variant is added, and vice versa.
-- A regex pattern `http://(localhost|127\.0\.0\.1):[0-9]+` matches any localhost port as a fallback.
 - `http://localhost:6001` and `http://127.0.0.1:6001` are always included.
+- If `ALLOW_LOCALHOST_PORTS=true`, the regex pattern `http://(localhost|127\.0\.0\.1):[0-9]+` allows any localhost port as a development fallback.
 
 For production, set `CORS_ORIGINS` to your actual frontend domain(s).
 
@@ -185,6 +186,7 @@ Restart the frontend dev server after changing `.env.local`.
 DATABASE_PATH=backend/data/debate_council.db
 FRONTEND_ORIGIN=http://localhost:6001
 CORS_ORIGINS=http://localhost:6001
+ALLOW_LOCALHOST_PORTS=false
 DEBATE_ROUNDS=2
 LITELLM_TIMEOUT_SECONDS=120
 MOCK_LLM_RESPONSES=false

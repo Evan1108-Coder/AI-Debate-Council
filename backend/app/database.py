@@ -9,6 +9,8 @@ from threading import RLock
 from typing import Iterator
 from uuid import uuid4
 
+from .costing import normalize_currency
+
 
 SESSION_COUNTER_KEY = "session_counter"
 DEFAULT_SESSION_PREFIX = "Debate Session #"
@@ -22,6 +24,13 @@ AGENT_ROLE_KEYS = (
     "judge_assistant",
     "judge",
 )
+LEGACY_ROLE_MODEL_ALIASES = {
+    "advocate": "lead_advocate",
+    "critic": "rebuttal_critic",
+    "researcher": "evidence_researcher",
+    "devils_advocate": "cross_examiner",
+}
+DEFAULT_ROLE_MODELS = {role: "" for role in AGENT_ROLE_KEYS}
 DEFAULT_AGENT_SETTINGS = {
     role: {
         "model": "",
@@ -38,13 +47,7 @@ DEFAULT_SESSION_SETTINGS = {
     "debaters_per_team": 3,
     "judge_assistant_enabled": True,
     "agent_settings": DEFAULT_AGENT_SETTINGS,
-    "role_models": {
-        "advocate": "",
-        "critic": "",
-        "researcher": "",
-        "devils_advocate": "",
-        "judge": "",
-    },
+    "role_models": DEFAULT_ROLE_MODELS,
     "temperature": 0.55,
     "max_tokens": 700,
     "debate_tone": "Academic",
@@ -53,6 +56,9 @@ DEFAULT_SESSION_SETTINGS = {
     "auto_scroll": True,
     "show_timestamps": False,
     "show_token_count": False,
+    "show_money_cost": True,
+    "cost_currency": "USD",
+    "show_model_costs": False,
     "context_window": 2,
     "debate_rounds": 2,
     "researcher_web_search": False,
@@ -70,6 +76,21 @@ def row_to_dict(row: sqlite3.Row | None) -> dict | None:
     return dict(row) if row else None
 
 
+def message_row_to_dict(row: sqlite3.Row | None) -> dict | None:
+    if not row:
+        return None
+    payload = dict(row)
+    raw_summary = payload.get("cost_summary")
+    if raw_summary:
+        try:
+            payload["cost_summary"] = json.loads(raw_summary)
+        except json.JSONDecodeError:
+            payload["cost_summary"] = None
+    else:
+        payload["cost_summary"] = None
+    return payload
+
+
 class Database:
     def __init__(self, path: Path):
         self.path = path
@@ -83,9 +104,11 @@ class Database:
         return connection
 
     @contextmanager
-    def session(self) -> Iterator[sqlite3.Connection]:
+    def session(self, *, immediate: bool = False) -> Iterator[sqlite3.Connection]:
         connection = self.connect()
         try:
+            if immediate:
+                connection.execute("BEGIN IMMEDIATE")
             yield connection
             connection.commit()
         except Exception:
@@ -126,6 +149,9 @@ class Database:
                     auto_scroll INTEGER NOT NULL,
                     show_timestamps INTEGER NOT NULL,
                     show_token_count INTEGER NOT NULL,
+                    show_money_cost INTEGER NOT NULL DEFAULT 1,
+                    cost_currency TEXT NOT NULL DEFAULT 'USD',
+                    show_model_costs INTEGER NOT NULL DEFAULT 0,
                     context_window INTEGER NOT NULL,
                     debate_rounds INTEGER NOT NULL,
                     researcher_web_search INTEGER NOT NULL,
@@ -160,6 +186,7 @@ class Database:
                     speaker TEXT NOT NULL,
                     model TEXT NOT NULL,
                     content TEXT NOT NULL,
+                    cost_summary TEXT,
                     sequence INTEGER NOT NULL,
                     created_at TEXT NOT NULL,
                     hidden_at TEXT,
@@ -222,6 +249,18 @@ class Database:
             connection.execute(
                 "ALTER TABLE session_settings ADD COLUMN agent_settings TEXT NOT NULL DEFAULT '{}'"
             )
+        if "show_money_cost" not in columns:
+            connection.execute(
+                "ALTER TABLE session_settings ADD COLUMN show_money_cost INTEGER NOT NULL DEFAULT 1"
+            )
+        if "cost_currency" not in columns:
+            connection.execute(
+                "ALTER TABLE session_settings ADD COLUMN cost_currency TEXT NOT NULL DEFAULT 'USD'"
+            )
+        if "show_model_costs" not in columns:
+            connection.execute(
+                "ALTER TABLE session_settings ADD COLUMN show_model_costs INTEGER NOT NULL DEFAULT 0"
+            )
 
     def _ensure_history_schema(self, connection: sqlite3.Connection) -> None:
         debate_columns = {
@@ -282,6 +321,8 @@ class Database:
         }
         if "hidden_at" not in message_columns:
             connection.execute("ALTER TABLE messages ADD COLUMN hidden_at TEXT")
+        if "cost_summary" not in message_columns:
+            connection.execute("ALTER TABLE messages ADD COLUMN cost_summary TEXT")
 
     def list_sessions(self) -> list[dict]:
         with self.lock, self.session() as connection:
@@ -302,8 +343,7 @@ class Database:
             return row_to_dict(row)
 
     def create_session(self, max_sessions: int) -> dict:
-        with self.lock, self.session() as connection:
-            connection.execute("BEGIN IMMEDIATE")
+        with self.lock, self.session(immediate=True) as connection:
             session_count = connection.execute(
                 "SELECT COUNT(*) AS total FROM sessions"
             ).fetchone()["total"]
@@ -364,6 +404,9 @@ class Database:
                 auto_scroll,
                 show_timestamps,
                 show_token_count,
+                show_money_cost,
+                cost_currency,
+                show_model_costs,
                 context_window,
                 debate_rounds,
                 researcher_web_search,
@@ -372,7 +415,7 @@ class Database:
                 auto_save_interval,
                 updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 session_id,
@@ -389,6 +432,9 @@ class Database:
                 int(DEFAULT_SESSION_SETTINGS["auto_scroll"]),
                 int(DEFAULT_SESSION_SETTINGS["show_timestamps"]),
                 int(DEFAULT_SESSION_SETTINGS["show_token_count"]),
+                int(DEFAULT_SESSION_SETTINGS["show_money_cost"]),
+                DEFAULT_SESSION_SETTINGS["cost_currency"],
+                int(DEFAULT_SESSION_SETTINGS["show_model_costs"]),
                 DEFAULT_SESSION_SETTINGS["context_window"],
                 DEFAULT_SESSION_SETTINGS["debate_rounds"],
                 int(DEFAULT_SESSION_SETTINGS["researcher_web_search"]),
@@ -401,7 +447,9 @@ class Database:
 
     def get_session_settings(self, session_id: str) -> dict | None:
         with self.lock, self.session() as connection:
-            if not self.get_session(session_id):
+            if not connection.execute(
+                "SELECT id FROM sessions WHERE id = ?", (session_id,)
+            ).fetchone():
                 return None
             self._ensure_settings(connection, session_id)
             row = connection.execute(
@@ -443,6 +491,9 @@ class Database:
                     auto_scroll = ?,
                     show_timestamps = ?,
                     show_token_count = ?,
+                    show_money_cost = ?,
+                    cost_currency = ?,
+                    show_model_costs = ?,
                     context_window = ?,
                     debate_rounds = ?,
                     researcher_web_search = ?,
@@ -466,6 +517,9 @@ class Database:
                     int(next_settings["auto_scroll"]),
                     int(next_settings["show_timestamps"]),
                     int(next_settings["show_token_count"]),
+                    int(next_settings["show_money_cost"]),
+                    next_settings["cost_currency"],
+                    int(next_settings["show_model_costs"]),
                     next_settings["context_window"],
                     next_settings["debate_rounds"],
                     int(next_settings["researcher_web_search"]),
@@ -496,6 +550,9 @@ class Database:
                 "auto_scroll": bool(row["auto_scroll"]),
                 "show_timestamps": bool(row["show_timestamps"]),
                 "show_token_count": bool(row["show_token_count"]),
+                "show_money_cost": bool(row["show_money_cost"]),
+                "cost_currency": row["cost_currency"],
+                "show_model_costs": bool(row["show_model_costs"]),
                 "context_window": row["context_window"],
                 "debate_rounds": row["debate_rounds"],
                 "researcher_web_search": bool(row["researcher_web_search"]),
@@ -508,7 +565,7 @@ class Database:
 
     def _normalize_settings(self, settings_payload: dict) -> dict:
         merged = {**DEFAULT_SESSION_SETTINGS, **settings_payload}
-        role_models = {**DEFAULT_SESSION_SETTINGS["role_models"], **(merged.get("role_models") or {})}
+        role_models = self._normalize_role_models(merged.get("role_models") or {})
         agent_settings = self._normalize_agent_settings(
             merged.get("agent_settings") or {},
             role_models,
@@ -519,7 +576,7 @@ class Database:
             "debaters_per_team": max(1, min(4, int(merged.get("debaters_per_team", 3)))),
             "judge_assistant_enabled": bool(merged.get("judge_assistant_enabled", True)),
             "agent_settings": agent_settings,
-            "role_models": {key: str(role_models.get(key, "")).strip() for key in DEFAULT_SESSION_SETTINGS["role_models"]},
+            "role_models": role_models,
             "temperature": max(0.0, min(1.0, float(merged.get("temperature", 0.55)))),
             "max_tokens": max(120, min(2000, int(merged.get("max_tokens", 700)))),
             "debate_tone": str(merged.get("debate_tone", "Academic")),
@@ -528,6 +585,9 @@ class Database:
             "auto_scroll": bool(merged.get("auto_scroll", True)),
             "show_timestamps": bool(merged.get("show_timestamps", False)),
             "show_token_count": bool(merged.get("show_token_count", False)),
+            "show_money_cost": bool(merged.get("show_money_cost", True)),
+            "cost_currency": normalize_currency(str(merged.get("cost_currency", "USD"))),
+            "show_model_costs": bool(merged.get("show_model_costs", False)),
             "context_window": max(0, min(6, int(merged.get("context_window", 2)))),
             "debate_rounds": max(1, min(6, int(merged.get("debate_rounds", 2)))),
             "researcher_web_search": bool(merged.get("researcher_web_search", False)),
@@ -540,23 +600,17 @@ class Database:
     def _normalize_agent_settings(
         self,
         agent_payload: dict,
-        legacy_role_models: dict,
+        role_models: dict,
         merged: dict,
     ) -> dict:
-        legacy_model_map = {
-            "lead_advocate": legacy_role_models.get("advocate", ""),
-            "rebuttal_critic": legacy_role_models.get("critic", ""),
-            "evidence_researcher": legacy_role_models.get("researcher", ""),
-            "cross_examiner": legacy_role_models.get("devils_advocate", ""),
-            "judge": legacy_role_models.get("judge", ""),
-        }
         normalized = {}
         for role in AGENT_ROLE_KEYS:
             base = DEFAULT_AGENT_SETTINGS[role]
             raw = agent_payload.get(role, {}) if isinstance(agent_payload, dict) else {}
             if not isinstance(raw, dict):
                 raw = {}
-            model = str(raw.get("model", legacy_model_map.get(role, ""))).strip()
+            raw_model = str(raw.get("model", "")).strip()
+            model = raw_model or role_models.get(role, "")
             normalized[role] = {
                 "model": model,
                 "temperature": max(0.0, min(1.0, float(raw.get("temperature", merged.get("temperature", base["temperature"]))))),
@@ -569,6 +623,16 @@ class Database:
                 "web_search": bool(raw.get("web_search", merged.get("researcher_web_search", base["web_search"]))),
                 "always_on": bool(raw.get("always_on", base["always_on"])),
             }
+        return normalized
+
+    def _normalize_role_models(self, role_models: dict) -> dict:
+        normalized = {role: "" for role in AGENT_ROLE_KEYS}
+        if not isinstance(role_models, dict):
+            return normalized
+        for raw_key, raw_value in role_models.items():
+            role = LEGACY_ROLE_MODEL_ALIASES.get(str(raw_key), str(raw_key))
+            if role in normalized:
+                normalized[role] = str(raw_value).strip()
         return normalized
 
     def _normalize_choice(self, value: object, choices: set[str], default: str) -> str:
@@ -600,8 +664,7 @@ class Database:
             return row_to_dict(row)
 
     def delete_session(self, session_id: str) -> bool:
-        with self.lock, self.session() as connection:
-            connection.execute("BEGIN IMMEDIATE")
+        with self.lock, self.session(immediate=True) as connection:
             cursor = connection.execute("DELETE FROM sessions WHERE id = ?", (session_id,))
             deleted = cursor.rowcount > 0
             remaining = connection.execute(
@@ -787,6 +850,7 @@ class Database:
         speaker: str,
         model: str,
         content: str,
+        cost_summary: dict | None = None,
     ) -> dict:
         with self.lock, self.session() as connection:
             sequence = (
@@ -805,8 +869,8 @@ class Database:
             connection.execute(
                 """
                 INSERT INTO messages
-                    (id, session_id, debate_id, role, speaker, model, content, sequence, created_at, hidden_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                    (id, session_id, debate_id, role, speaker, model, content, cost_summary, sequence, created_at, hidden_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                 """,
                 (
                     message_id,
@@ -816,6 +880,7 @@ class Database:
                     speaker,
                     model,
                     content,
+                    json.dumps(cost_summary) if cost_summary else None,
                     sequence,
                     now,
                 ),
@@ -826,7 +891,7 @@ class Database:
             row = connection.execute(
                 "SELECT * FROM messages WHERE id = ?", (message_id,)
             ).fetchone()
-            return row_to_dict(row) or {}
+            return message_row_to_dict(row) or {}
 
     def list_messages(self, session_id: str, *, include_hidden: bool = False) -> list[dict]:
         with self.lock, self.session() as connection:
@@ -841,7 +906,7 @@ class Database:
                 """,
                 (session_id,),
             ).fetchall()
-            return [dict(row) for row in rows]
+            return [message_row_to_dict(row) or {} for row in rows]
 
     def clear_visible_history(self, session_id: str) -> bool:
         with self.lock, self.session() as connection:

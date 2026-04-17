@@ -16,6 +16,7 @@ import {
   listDebates,
   listMessages,
   listSessions,
+  recordRuntimeDiary,
   renameDebate,
   renameSession,
   updateSessionSettings,
@@ -33,6 +34,8 @@ import type {
 } from "@/types";
 
 const MAX_SESSIONS = 10;
+const WEBSOCKET_CONNECT_RETRIES = 2;
+const WEBSOCKET_RETRY_DELAY_MS = 1200;
 type ClearTarget = { session: ChatSession; mode: "history" | "memory" };
 type DebateDeleteTarget = { session: ChatSession; debate: DebateRecord };
 
@@ -74,6 +77,7 @@ export default function Home() {
   const [deletingDebateId, setDeletingDebateId] = useState<string | null>(null);
   const [clearingSessionId, setClearingSessionId] = useState<string | null>(null);
   const socketRefs = useRef<Record<string, WebSocket>>({});
+  const retryTimerRefs = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
   const selectedSession = sessions.find((session) => session.id === selectedId) ?? null;
   const selectedMessages = selectedId ? messagesBySession[selectedId] ?? [] : [];
@@ -158,8 +162,16 @@ export default function Home() {
 
         setSessions(sessionList);
         setSelectedId(sessionList[0]?.id ?? null);
+        recordRuntimeDiary(
+          "frontend boot",
+          `Loaded ${sessionList.length} session(s) and ${modelData.available_model_count} unlocked model(s).`
+        );
       } catch (exc) {
         setError(exc instanceof Error ? exc.message : "Startup failed.");
+        recordRuntimeDiary(
+          "frontend boot failed",
+          exc instanceof Error ? exc.message : "Startup failed."
+        );
       }
     }
 
@@ -171,6 +183,7 @@ export default function Home() {
 
   useEffect(() => {
     return () => {
+      Object.values(retryTimerRefs.current).forEach((timer) => clearTimeout(timer));
       Object.values(socketRefs.current).forEach((socket) => socket.close());
     };
   }, []);
@@ -268,6 +281,7 @@ export default function Home() {
 
     try {
       await deleteSession(target.id);
+      clearSocketRetry(target.id);
       socketRefs.current[target.id]?.close();
       delete socketRefs.current[target.id];
       setSessions(nextSessions);
@@ -453,6 +467,109 @@ export default function Home() {
     handleUpdateSettings({ overall_model: modelName }).catch(() => undefined);
   }
 
+  function clearSocketRetry(sessionId: string) {
+    const timer = retryTimerRefs.current[sessionId];
+    if (timer) {
+      clearTimeout(timer);
+      delete retryTimerRefs.current[sessionId];
+    }
+  }
+
+  function openInteractionSocket(
+    sessionId: string,
+    content: string,
+    modelName: string,
+    attempt: number
+  ) {
+    clearSocketRetry(sessionId);
+    let serverStarted = false;
+    let sentStart = false;
+    let finished = false;
+    const websocket = new WebSocket(`${WS_BASE}/ws/debates/${sessionId}`);
+    socketRefs.current[sessionId] = websocket;
+
+    websocket.onopen = () => {
+      websocket.send(JSON.stringify({ type: "start_interaction", topic: content, model: modelName }));
+      sentStart = true;
+      recordRuntimeDiary("websocket opened", `Started interaction with ${modelName}.`, sessionId);
+      setDraftBySession((current) => ({ ...current, [sessionId]: "" }));
+      setStatusBySession((current) => ({
+        ...current,
+        [sessionId]: attempt > 0 ? "Reconnected. Council is working." : "Council is working."
+      }));
+    };
+
+    websocket.onmessage = (event) => {
+      serverStarted = true;
+      const payload = JSON.parse(event.data) as DebateEvent;
+      if (
+        payload.type === "debate_completed" ||
+        payload.type === "interaction_completed" ||
+        payload.type === "error"
+      ) {
+        finished = true;
+      }
+      if (payload.type === "error") {
+        recordRuntimeDiary("websocket server error", formatErrorMessage(payload.message), sessionId);
+      }
+      handleDebateEvent(sessionId, payload);
+    };
+
+    websocket.onerror = () => {
+      recordRuntimeDiary("websocket error", "Browser reported a WebSocket error.", sessionId);
+      if (!sentStart && !serverStarted && attempt < WEBSOCKET_CONNECT_RETRIES) {
+        setStatusBySession((current) => ({
+          ...current,
+          [sessionId]: `Connection failed. Retrying (${attempt + 1}/${WEBSOCKET_CONNECT_RETRIES})...`
+        }));
+        return;
+      }
+      if (!finished) {
+        setError("WebSocket connection failed.");
+        setStatusBySession((current) => ({ ...current, [sessionId]: "Connection failed." }));
+      }
+    };
+
+    websocket.onclose = () => {
+      if (socketRefs.current[sessionId] === websocket) {
+        delete socketRefs.current[sessionId];
+      }
+      if (finished) {
+        recordRuntimeDiary("websocket closed", "Interaction completed and socket closed.", sessionId);
+        return;
+      }
+      recordRuntimeDiary(
+        "websocket closed early",
+        serverStarted
+          ? "Connection closed before the council finished."
+          : "Connection closed before the council started.",
+        sessionId
+      );
+      if (!sentStart && !serverStarted && attempt < WEBSOCKET_CONNECT_RETRIES) {
+        retryTimerRefs.current[sessionId] = setTimeout(() => {
+          openInteractionSocket(sessionId, content, modelName, attempt + 1);
+        }, WEBSOCKET_RETRY_DELAY_MS);
+        return;
+      }
+      setRunningBySession((current) => ({ ...current, [sessionId]: false }));
+      setPartialBySession((current) => ({ ...current, [sessionId]: {} }));
+      setStatusBySession((current) => ({
+        ...current,
+        [sessionId]: serverStarted
+          ? "Connection dropped. Saved messages were reloaded."
+          : "Connection closed before the council started."
+      }));
+      setError(
+        serverStarted
+          ? "WebSocket disconnected before the council finished. I reloaded saved messages; send again if you want to continue."
+          : "WebSocket connection closed before the council started."
+      );
+      refreshMessages(sessionId).catch(() => undefined);
+      refreshDebates(sessionId).catch(() => undefined);
+      refreshAnalytics(sessionId).catch(() => undefined);
+    };
+  }
+
   function handleSend() {
     if (!selectedId || !selectedSession || runningBySession[selectedId]) {
       return;
@@ -473,31 +590,7 @@ export default function Home() {
     setPartialBySession((current) => ({ ...current, [sessionId]: {} }));
     setAssignmentsBySession((current) => ({ ...current, [sessionId]: [] }));
     setRunningBySession((current) => ({ ...current, [sessionId]: true }));
-
-    const websocket = new WebSocket(`${WS_BASE}/ws/debates/${sessionId}`);
-    socketRefs.current[sessionId] = websocket;
-
-    websocket.onopen = () => {
-      websocket.send(JSON.stringify({ type: "start_interaction", topic: content, model: modelName }));
-      setDraftBySession((current) => ({ ...current, [sessionId]: "" }));
-      setStatusBySession((current) => ({ ...current, [sessionId]: "Council is working." }));
-    };
-
-    websocket.onmessage = (event) => {
-      const payload = JSON.parse(event.data) as DebateEvent;
-      handleDebateEvent(sessionId, payload);
-    };
-
-    websocket.onerror = () => {
-      setError("WebSocket connection failed.");
-      setStatusBySession((current) => ({ ...current, [sessionId]: "Connection failed." }));
-      setRunningBySession((current) => ({ ...current, [sessionId]: false }));
-    };
-
-    websocket.onclose = () => {
-      setRunningBySession((current) => ({ ...current, [sessionId]: false }));
-      delete socketRefs.current[sessionId];
-    };
+    openInteractionSocket(sessionId, content, modelName, 0);
   }
 
   function handleDebateEvent(sessionId: string, event: DebateEvent) {
@@ -549,6 +642,27 @@ export default function Home() {
             [event.stream_id]: {
               ...existing,
               content: existing.content + event.delta
+            }
+          }
+        };
+      });
+      return;
+    }
+
+    if (event.type === "message_replaced") {
+      setPartialBySession((current) => {
+        const sessionPartials = current[sessionId] ?? {};
+        const existing = sessionPartials[event.stream_id];
+        if (!existing) {
+          return current;
+        }
+        return {
+          ...current,
+          [sessionId]: {
+            ...sessionPartials,
+            [event.stream_id]: {
+              ...existing,
+              content: event.content
             }
           }
         };

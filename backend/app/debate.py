@@ -7,12 +7,14 @@ from textwrap import dedent
 from typing import Any
 from uuid import uuid4
 
-from fastapi import WebSocket
+from fastapi import WebSocket, WebSocketDisconnect
 
 from .analytics import analyze_debate, format_analytics_report
 from .config import settings
+from .costing import CostTracker, message_input_text
 from .database import Database, utc_now
 from .model_registry import MOCK_MODEL, SupportedModel, get_available_model
+from .runtime_diary import runtime_diary
 
 
 try:
@@ -96,6 +98,14 @@ class CompletionStreamError(Exception):
         self.had_output = had_output
 
 
+class EmptyCompletionError(DebateError):
+    pass
+
+
+class ClientDisconnectedError(DebateError):
+    pass
+
+
 class DebateManager:
     def __init__(self, db: Database):
         self.db = db
@@ -120,28 +130,67 @@ class DebateManager:
             self._active_sessions.add(session_id)
 
         try:
+            cost_tracker = CostTracker()
             session_settings = self._settings_snapshot(session_id)
             effective_model_name = selected_model_name.strip() or str(
                 session_settings.get("overall_model", "")
             ).strip()
             selected_model = self._resolve_selected_model(effective_model_name)
+            runtime_diary.record(
+                "backend terminal",
+                "interaction received",
+                f"Session {session_id[:8]} using {selected_model.name}. Message preview: {self._clip_for_prompt(cleaned_content, 180)}",
+                session_id=session_id,
+            )
+            safety = await self._safety_lock_assessment(
+                cleaned_content, selected_model, cost_tracker, session_id=session_id
+            )
+            if safety.get("action") == "assist":
+                runtime_diary.record(
+                    "backend terminal",
+                    "safety lock routed to Council Assistant",
+                    str(safety.get("reason") or "Extreme unsafe request detected."),
+                    session_id=session_id,
+                )
+                await self.run_safety_response(
+                    websocket, session_id, cleaned_content, selected_model, safety, cost_tracker
+                )
+                return
             if self._council_assistant_always_on(session_settings):
                 intent = "chat"
             else:
                 intent = await self._classify_intent(
-                    cleaned_content, selected_model, session_settings
+                    cleaned_content,
+                    selected_model,
+                    session_settings,
+                    cost_tracker,
+                    session_id=session_id,
                 )
+            runtime_diary.record(
+                "backend terminal",
+                "intent routed",
+                f"Session {session_id[:8]} routed to {intent}.",
+                session_id=session_id,
+            )
             if intent == "debate":
-                await self.run_debate(websocket, session_id, cleaned_content, effective_model_name)
+                await self.run_debate(
+                    websocket, session_id, cleaned_content, effective_model_name, cost_tracker
+                )
             else:
-                await self.run_chat(websocket, session_id, cleaned_content, selected_model)
+                await self.run_chat(websocket, session_id, cleaned_content, selected_model, cost_tracker)
         finally:
             async with self._lock:
                 self._active_sessions.discard(session_id)
 
     async def run_debate(
-        self, websocket: WebSocket, session_id: str, topic: str, selected_model_name: str
+        self,
+        websocket: WebSocket,
+        session_id: str,
+        topic: str,
+        selected_model_name: str,
+        cost_tracker: CostTracker | None = None,
     ) -> None:
+        cost_tracker = cost_tracker or CostTracker()
         cleaned_topic = " ".join(topic.strip().split())
         if not cleaned_topic:
             raise DebateError("Please enter a debate topic.")
@@ -161,6 +210,12 @@ class DebateManager:
             debate = self.db.create_debate(session_id, cleaned_topic)
             debate_id = debate["id"]
             self._active_debates.add(debate_id)
+        runtime_diary.record(
+            "backend terminal",
+            "debate started",
+            f"Debate {debate_id[:8]} started with {selected_model.name}. Topic: {self._clip_for_prompt(cleaned_topic, 180)}",
+            session_id=session_id,
+        )
 
         user_message = self.db.add_message(
             session_id=session_id,
@@ -170,10 +225,12 @@ class DebateManager:
             model="user",
             content=cleaned_topic,
         )
-        await websocket.send_json(
+        await self._send_json(
+            websocket,
             {"type": "message_completed", "stream_id": user_message["id"], "message": user_message}
         )
-        await websocket.send_json(
+        await self._send_json(
+            websocket,
             {
                 "type": "debate_started",
                 "debate": debate,
@@ -212,6 +269,7 @@ class DebateManager:
                     max_turns=current_max_turns,
                     model=selected_model,
                     session_settings=turn_settings,
+                    cost_tracker=cost_tracker,
                 )
                 if not bid:
                     break
@@ -235,6 +293,7 @@ class DebateManager:
                     session_settings=turn_settings,
                     generation_settings=generation_settings,
                     bid=bid,
+                    cost_tracker=cost_tracker,
                 )
                 transcript.append(
                     {
@@ -250,7 +309,8 @@ class DebateManager:
                     }
                 )
                 latest_analysis = analyze_debate(cleaned_topic, transcript)
-                await websocket.send_json(
+                await self._send_json(
+                    websocket,
                     {
                         "type": "analysis_updated",
                         "round": latest_analysis["round"],
@@ -276,6 +336,7 @@ class DebateManager:
                     generation_settings=self._agent_generation_settings(
                         assistant_settings, "judge_assistant"
                     ),
+                    cost_tracker=cost_tracker,
                 )
 
             judge_settings = self._settings_snapshot(session_id)
@@ -291,29 +352,66 @@ class DebateManager:
                 session_settings=judge_settings,
                 generation_settings=self._agent_generation_settings(judge_settings, "judge"),
                 judge_assistant_report=judge_assistant_report,
+                cost_tracker=cost_tracker,
             )
+            cost_summary = cost_tracker.summary(judge_settings.get("cost_currency", "USD"))
             self.db.complete_debate(debate_id, judge_summary)
-            await websocket.send_json(
+            runtime_diary.record(
+                "backend terminal",
+                "debate completed",
+                f"Debate {debate_id[:8]} completed. Judge summary saved.",
+                session_id=session_id,
+            )
+            await self._send_json(
+                websocket,
                 {
                     "type": "debate_completed",
                     "debate_id": debate_id,
                     "judge_summary": judge_summary,
                     "active_debates": self.active_count - 1,
+                    "cost_summary": cost_summary,
                 }
             )
+        except ClientDisconnectedError as exc:
+            self.db.fail_debate(debate_id, str(exc))
+            runtime_diary.record(
+                "backend terminal",
+                "debate client disconnected",
+                f"Debate {debate_id[:8]} stopped because the browser disconnected.",
+                session_id=session_id,
+            )
+            raise
         except Exception as exc:
             self.db.fail_debate(debate_id, str(exc))
+            runtime_diary.record(
+                "backend terminal",
+                "debate failed",
+                f"Debate {debate_id[:8]} failed: {exc}",
+                session_id=session_id,
+            )
             raise
         finally:
             async with self._lock:
                 self._active_debates.discard(debate_id)
 
     async def run_chat(
-        self, websocket: WebSocket, session_id: str, content: str, selected_model: SupportedModel
+        self,
+        websocket: WebSocket,
+        session_id: str,
+        content: str,
+        selected_model: SupportedModel,
+        cost_tracker: CostTracker | None = None,
     ) -> None:
+        cost_tracker = cost_tracker or CostTracker()
         session_settings = self._settings_snapshot(session_id)
         chat_record = self.db.create_debate(session_id, content, mode="chat")
         debate_id = chat_record["id"]
+        runtime_diary.record(
+            "backend terminal",
+            "Council Assistant chat started",
+            f"Chat {debate_id[:8]} started with {selected_model.name}.",
+            session_id=session_id,
+        )
         user_message = self.db.add_message(
             session_id=session_id,
             debate_id=debate_id,
@@ -322,7 +420,8 @@ class DebateManager:
             model="user",
             content=content,
         )
-        await websocket.send_json(
+        await self._send_json(
+            websocket,
             {
                 "type": "interaction_started",
                 "mode": "chat",
@@ -330,7 +429,8 @@ class DebateManager:
                 "selected_model": selected_model.public_dict(configured=True),
             }
         )
-        await websocket.send_json(
+        await self._send_json(
+            websocket,
             {"type": "message_completed", "stream_id": user_message["id"], "message": user_message}
         )
 
@@ -339,7 +439,8 @@ class DebateManager:
             session_settings, "council_assistant"
         )
         stream_id = str(uuid4())
-        await websocket.send_json(
+        await self._send_json(
+            websocket,
             {
                 "type": "message_started",
                 "stream_id": stream_id,
@@ -358,13 +459,51 @@ class DebateManager:
             }
         )
         messages = self._chat_messages(session_id, content, session_settings, chat_generation_settings)
-        response = await self._stream_completion(
-            websocket,
-            stream_id,
-            chat_model,
-            messages,
-            session_settings=chat_generation_settings,
-        )
+        try:
+            response = await self._stream_completion(
+                websocket,
+                stream_id,
+                chat_model,
+                messages,
+                session_settings=chat_generation_settings,
+                cost_tracker=cost_tracker,
+                cost_operation="Council Assistant",
+            )
+        except ClientDisconnectedError:
+            self.db.fail_debate(debate_id, "Browser disconnected before the response finished.")
+            runtime_diary.record(
+                "backend terminal",
+                "Council Assistant client disconnected",
+                f"Chat {debate_id[:8]} stopped because the browser disconnected.",
+                session_id=session_id,
+            )
+            raise
+        except Exception as exc:
+            cost_summary = cost_tracker.summary(session_settings.get("cost_currency", "USD"))
+            await self._save_failed_stream_message(
+                websocket=websocket,
+                stream_id=stream_id,
+                session_id=session_id,
+                debate_id=debate_id,
+                role="assistant",
+                speaker="Council Assistant",
+                model=chat_model.name,
+                exc=exc,
+                cost_summary=cost_summary,
+            )
+            self.db.fail_debate(debate_id, str(exc))
+            runtime_diary.record(
+                "backend terminal",
+                "Council Assistant chat failed",
+                f"Chat {debate_id[:8]} failed: {exc}",
+                session_id=session_id,
+            )
+            await self._send_json(
+                websocket,
+                {"type": "interaction_completed", "mode": "chat", "debate_id": debate_id, "cost_summary": cost_summary}
+            )
+            return
+        cost_summary = cost_tracker.summary(session_settings.get("cost_currency", "USD"))
         saved = self.db.add_message(
             session_id=session_id,
             debate_id=debate_id,
@@ -372,13 +511,87 @@ class DebateManager:
             speaker="Council Assistant",
             model=chat_model.name,
             content=response,
+            cost_summary=cost_summary,
         )
         self.db.complete_debate(debate_id, response)
-        await websocket.send_json(
+        runtime_diary.record(
+            "backend terminal",
+            "Council Assistant chat completed",
+            f"Chat {debate_id[:8]} completed.",
+            session_id=session_id,
+        )
+        await self._send_json(
+            websocket,
             {"type": "message_completed", "stream_id": stream_id, "message": saved}
         )
-        await websocket.send_json(
-            {"type": "interaction_completed", "mode": "chat", "debate_id": debate_id}
+        await self._send_json(
+            websocket,
+            {"type": "interaction_completed", "mode": "chat", "debate_id": debate_id, "cost_summary": cost_summary}
+        )
+
+    async def run_safety_response(
+        self,
+        websocket: WebSocket,
+        session_id: str,
+        content: str,
+        selected_model: SupportedModel,
+        safety: dict[str, Any],
+        cost_tracker: CostTracker,
+    ) -> None:
+        session_settings = self._settings_snapshot(session_id)
+        chat_record = self.db.create_debate(session_id, content, mode="chat")
+        debate_id = chat_record["id"]
+        runtime_diary.record(
+            "backend terminal",
+            "safety response started",
+            f"Chat {debate_id[:8]} is answering through the Council Assistant safety lock.",
+            session_id=session_id,
+        )
+        user_message = self.db.add_message(
+            session_id=session_id,
+            debate_id=debate_id,
+            role="user",
+            speaker="You",
+            model="user",
+            content=content,
+        )
+        response = self._safety_lock_message(safety)
+        cost_summary = cost_tracker.summary(session_settings.get("cost_currency", "USD"))
+        saved = self.db.add_message(
+            session_id=session_id,
+            debate_id=debate_id,
+            role="assistant",
+            speaker="Council Assistant",
+            model=selected_model.name,
+            content=response,
+            cost_summary=cost_summary,
+        )
+        self.db.complete_debate(debate_id, response)
+        await self._send_json(
+            websocket,
+            {
+                "type": "interaction_started",
+                "mode": "chat",
+                "debate": chat_record,
+                "selected_model": selected_model.public_dict(configured=True),
+            },
+        )
+        await self._send_json(
+            websocket,
+            {"type": "message_completed", "stream_id": user_message["id"], "message": user_message},
+        )
+        await self._send_json(
+            websocket,
+            {"type": "message_completed", "stream_id": saved["id"], "message": saved},
+        )
+        await self._send_json(
+            websocket,
+            {
+                "type": "interaction_completed",
+                "mode": "chat",
+                "debate_id": debate_id,
+                "cost_summary": cost_summary,
+            },
         )
 
     def _resolve_selected_model(self, selected_model_name: str) -> SupportedModel:
@@ -394,17 +607,6 @@ class DebateManager:
                 f"{cleaned_model_name} is not available. Add that provider API key to .env first."
             )
         return model
-
-    def _resolve_role_model(
-        self, session_settings: dict[str, Any], role: str, default_model: SupportedModel
-    ) -> SupportedModel:
-        role_model_name = (session_settings.get("role_models") or {}).get(role, "").strip()
-        model_name = role_model_name or str(session_settings.get("overall_model", "")).strip()
-        if not model_name:
-            return default_model
-        if settings.mock_llm and model_name == MOCK_MODEL.name:
-            return MOCK_MODEL
-        return get_available_model(model_name) or default_model
 
     def _settings_snapshot(self, session_id: str) -> dict[str, Any]:
         return self.db.get_session_settings(session_id) or {}
@@ -506,6 +708,7 @@ class DebateManager:
         max_turns: int,
         model: SupportedModel,
         session_settings: dict[str, Any],
+        cost_tracker: CostTracker | None = None,
     ) -> dict[str, Any] | None:
         if turn_index >= max_turns:
             return None
@@ -525,6 +728,7 @@ class DebateManager:
             transcript=transcript,
             model=model,
             session_settings=session_settings,
+            cost_tracker=cost_tracker,
         )
         if moderator_bid == "END":
             return None
@@ -541,6 +745,7 @@ class DebateManager:
         transcript: list[dict[str, Any]],
         model: SupportedModel,
         session_settings: dict[str, Any],
+        cost_tracker: CostTracker | None = None,
     ) -> dict[str, Any] | str | None:
         if settings.mock_llm or acompletion is None or not model.api_key:
             return None
@@ -598,6 +803,21 @@ class DebateManager:
                 timeout=min(settings.request_timeout_seconds, 30),
             )
             text = self._completion_text(response)
+            if cost_tracker is not None:
+                cost_tracker.record_call(
+                    model_name=model.name,
+                    input_text=message_input_text(
+                        [
+                            {
+                                "role": "system",
+                                "content": "You are a neutral debate moderator. Select the next floor request.",
+                            },
+                            {"role": "user", "content": prompt},
+                        ]
+                    ),
+                    output_text=text,
+                    operation="moderator",
+                )
             payload = self._parse_json_object(text)
             if not payload:
                 return None
@@ -741,9 +961,11 @@ class DebateManager:
         session_settings: dict[str, Any],
         generation_settings: dict[str, Any],
         bid: dict[str, Any],
+        cost_tracker: CostTracker | None = None,
     ) -> str:
         stream_id = str(uuid4())
-        await websocket.send_json(
+        await self._send_json(
+            websocket,
             {
                 "type": "message_started",
                 "stream_id": stream_id,
@@ -765,13 +987,30 @@ class DebateManager:
         messages = self._agent_messages(
             topic, agent, round_number, transcript, session_settings, generation_settings, bid
         )
-        content = await self._stream_completion(
-            websocket,
-            stream_id,
-            model,
-            messages,
-            session_settings=generation_settings,
-        )
+        try:
+            content = await self._stream_completion(
+                websocket,
+                stream_id,
+                model,
+                messages,
+                session_settings=generation_settings,
+                cost_tracker=cost_tracker,
+                cost_operation=agent["speaker"],
+            )
+        except ClientDisconnectedError:
+            raise
+        except Exception as exc:
+            await self._save_failed_stream_message(
+                websocket=websocket,
+                stream_id=stream_id,
+                session_id=session_id,
+                debate_id=debate_id,
+                role=agent["role"],
+                speaker=agent["speaker"],
+                model=model.name,
+                exc=exc,
+            )
+            raise
         saved = self.db.add_message(
             session_id=session_id,
             debate_id=debate_id,
@@ -780,65 +1019,8 @@ class DebateManager:
             model=model.name,
             content=content,
         )
-        await websocket.send_json(
-            {"type": "message_completed", "stream_id": stream_id, "message": saved}
-        )
-        return content
-
-    async def _stream_debater_turn(
-        self,
-        *,
-        websocket: WebSocket,
-        session_id: str,
-        debate_id: str,
-        topic: str,
-        role_definition: dict[str, str],
-        model: SupportedModel,
-        round_number: int,
-        transcript: list[dict[str, Any]],
-        session_settings: dict[str, Any],
-    ) -> str:
-        stream_id = str(uuid4())
-        speaker = role_definition["speaker"]
-        role = role_definition["role"]
-        await websocket.send_json(
-            {
-                "type": "message_started",
-                "stream_id": stream_id,
-                "message": {
-                    "id": stream_id,
-                    "session_id": session_id,
-                    "debate_id": debate_id,
-                    "role": role,
-                    "speaker": speaker,
-                    "model": model.name,
-                    "content": "",
-                    "sequence": 0,
-                    "created_at": utc_now(),
-                },
-                "round": round_number,
-            }
-        )
-
-        messages = self._debater_messages(
-            topic, role_definition, round_number, transcript, session_settings
-        )
-        content = await self._stream_completion(
+        await self._send_json(
             websocket,
-            stream_id,
-            model,
-            messages,
-            session_settings=session_settings,
-        )
-        saved = self.db.add_message(
-            session_id=session_id,
-            debate_id=debate_id,
-            role=role,
-            speaker=speaker,
-            model=model.name,
-            content=content,
-        )
-        await websocket.send_json(
             {"type": "message_completed", "stream_id": stream_id, "message": saved}
         )
         return content
@@ -856,9 +1038,11 @@ class DebateManager:
         session_settings: dict[str, Any],
         generation_settings: dict[str, Any],
         judge_assistant_report: str,
+        cost_tracker: CostTracker | None = None,
     ) -> str:
         stream_id = str(uuid4())
-        await websocket.send_json(
+        await self._send_json(
+            websocket,
             {
                 "type": "message_started",
                 "stream_id": stream_id,
@@ -879,13 +1063,33 @@ class DebateManager:
         messages = self._judge_messages(
             topic, transcript, analysis, session_settings, generation_settings, judge_assistant_report
         )
-        content = await self._stream_completion(
-            websocket,
-            stream_id,
-            model,
-            messages,
-            session_settings=generation_settings,
-        )
+        try:
+            content = await self._stream_completion(
+                websocket,
+                stream_id,
+                model,
+                messages,
+                session_settings=generation_settings,
+                cost_tracker=cost_tracker,
+                cost_operation="Judge",
+            )
+        except ClientDisconnectedError:
+            raise
+        except Exception as exc:
+            await self._save_failed_stream_message(
+                websocket=websocket,
+                stream_id=stream_id,
+                session_id=session_id,
+                debate_id=debate_id,
+                role="judge",
+                speaker="Judge",
+                model=model.name,
+                exc=exc,
+                cost_summary=cost_tracker.summary(session_settings.get("cost_currency", "USD"))
+                if cost_tracker
+                else None,
+            )
+            raise
         saved = self.db.add_message(
             session_id=session_id,
             debate_id=debate_id,
@@ -893,8 +1097,12 @@ class DebateManager:
             speaker="Judge",
             model=model.name,
             content=content,
+            cost_summary=cost_tracker.summary(session_settings.get("cost_currency", "USD"))
+            if cost_tracker
+            else None,
         )
-        await websocket.send_json(
+        await self._send_json(
+            websocket,
             {"type": "message_completed", "stream_id": stream_id, "message": saved}
         )
         return content
@@ -911,9 +1119,11 @@ class DebateManager:
         analysis: dict[str, Any],
         session_settings: dict[str, Any],
         generation_settings: dict[str, Any],
+        cost_tracker: CostTracker | None = None,
     ) -> str:
         stream_id = str(uuid4())
-        await websocket.send_json(
+        await self._send_json(
+            websocket,
             {
                 "type": "message_started",
                 "stream_id": stream_id,
@@ -934,13 +1144,30 @@ class DebateManager:
         messages = self._judge_assistant_messages(
             topic, transcript, analysis, session_settings, generation_settings
         )
-        content = await self._stream_completion(
-            websocket,
-            stream_id,
-            model,
-            messages,
-            session_settings=generation_settings,
-        )
+        try:
+            content = await self._stream_completion(
+                websocket,
+                stream_id,
+                model,
+                messages,
+                session_settings=generation_settings,
+                cost_tracker=cost_tracker,
+                cost_operation="Judge Assistant",
+            )
+        except ClientDisconnectedError:
+            raise
+        except Exception as exc:
+            await self._save_failed_stream_message(
+                websocket=websocket,
+                stream_id=stream_id,
+                session_id=session_id,
+                debate_id=debate_id,
+                role="judge_assistant",
+                speaker="Judge Assistant",
+                model=model.name,
+                exc=exc,
+            )
+            raise
         saved = self.db.add_message(
             session_id=session_id,
             debate_id=debate_id,
@@ -949,10 +1176,69 @@ class DebateManager:
             model=model.name,
             content=content,
         )
-        await websocket.send_json(
+        await self._send_json(
+            websocket,
             {"type": "message_completed", "stream_id": stream_id, "message": saved}
         )
         return content
+
+    async def _save_failed_stream_message(
+        self,
+        *,
+        websocket: WebSocket,
+        stream_id: str,
+        session_id: str,
+        debate_id: str,
+        role: str,
+        speaker: str,
+        model: str,
+        exc: Exception,
+        cost_summary: dict | None = None,
+    ) -> str:
+        content = self._failure_message(exc)
+        await self._send_json(
+            websocket,
+            {"type": "message_replaced", "stream_id": stream_id, "content": content}
+        )
+        saved = self.db.add_message(
+            session_id=session_id,
+            debate_id=debate_id,
+            role=role,
+            speaker=speaker,
+            model=model,
+            content=content,
+            cost_summary=cost_summary,
+        )
+        await self._send_json(
+            websocket,
+            {"type": "message_completed", "stream_id": stream_id, "message": saved}
+        )
+        return content
+
+    def _failure_message(self, exc: Exception) -> str:
+        return f"This AI response cannot be generated due to this error: {exc}"
+
+    async def _send_json(self, websocket: WebSocket, payload: dict[str, Any]) -> None:
+        try:
+            await websocket.send_json(payload)
+        except Exception as exc:
+            if self._is_client_disconnect_error(exc):
+                raise ClientDisconnectedError(
+                    "Browser disconnected before the response finished."
+                ) from exc
+            raise
+
+    def _is_client_disconnect_error(self, exc: Exception) -> bool:
+        if isinstance(exc, (ClientDisconnectedError, WebSocketDisconnect)):
+            return True
+        name = exc.__class__.__name__.lower()
+        text = str(exc).lower()
+        return (
+            name in {"clientdisconnected", "connectionclosedok", "connectionclosederror"}
+            or "cannot call \"send\" once a close message has been sent" in text
+            or "connection closed" in text
+            or "websocketdisconnect" in name
+        )
 
     async def _stream_completion(
         self,
@@ -961,9 +1247,19 @@ class DebateManager:
         model: SupportedModel,
         messages: list[dict[str, str]],
         session_settings: dict[str, Any] | None = None,
+        cost_tracker: CostTracker | None = None,
+        cost_operation: str = "completion",
     ) -> str:
         if settings.mock_llm:
-            return await self._stream_mock_completion(websocket, stream_id, model, messages)
+            content = await self._stream_mock_completion(websocket, stream_id, model, messages)
+            if cost_tracker is not None:
+                cost_tracker.record_call(
+                    model_name=model.name,
+                    input_text=message_input_text(messages),
+                    output_text=content,
+                    operation=cost_operation,
+                )
+            return content
 
         if acompletion is None:
             raise DebateError("LiteLLM is not installed. Run pip install -r backend/requirements.txt.")
@@ -990,8 +1286,26 @@ class DebateManager:
                         content,
                         generation_settings,
                     )
+                if cost_tracker is not None:
+                    cost_tracker.record_call(
+                        model_name=model.name,
+                        input_text=message_input_text(messages),
+                        output_text=content,
+                        operation=cost_operation,
+                    )
                 return content
+            except EmptyCompletionError:
+                if attempt < max_attempts - 1:
+                    await asyncio.sleep(1.2 * (attempt + 1))
+                    continue
+                raise
+            except ClientDisconnectedError:
+                raise
             except CompletionStreamError as exc:
+                if self._is_client_disconnect_error(exc.original):
+                    raise ClientDisconnectedError(
+                        "Browser disconnected before the response finished."
+                    ) from exc.original
                 if (
                     self._is_retryable_provider_error(exc.original)
                     and not exc.had_output
@@ -1035,21 +1349,27 @@ class DebateManager:
                 if not visible_delta:
                     continue
                 parts.append(visible_delta)
-                await websocket.send_json(
+                await self._send_json(
+                    websocket,
                     {"type": "message_delta", "stream_id": stream_id, "delta": visible_delta}
                 )
             tail = sanitizer.flush()
             if tail:
                 parts.append(tail)
-                await websocket.send_json(
+                await self._send_json(
+                    websocket,
                     {"type": "message_delta", "stream_id": stream_id, "delta": tail}
                 )
         except Exception as exc:
+            if self._is_client_disconnect_error(exc):
+                raise ClientDisconnectedError(
+                    "Browser disconnected before the response finished."
+                ) from exc
             raise CompletionStreamError(exc, had_output=bool(parts)) from exc
 
         content = sanitize_model_text("".join(parts)).strip()
         if not content:
-            raise DebateError(f"{model.name} returned an empty response.")
+            raise EmptyCompletionError(f"{model.name} returned an empty response.")
         return content, finish_reason
 
     async def _continue_truncated_completion(
@@ -1078,7 +1398,8 @@ class DebateManager:
         ]
         separator = "" if existing_content.endswith((" ", "\n", "-", "/", "(")) else "\n"
         if separator:
-            await websocket.send_json(
+            await self._send_json(
+                websocket,
                 {"type": "message_delta", "stream_id": stream_id, "delta": separator}
             )
         try:
@@ -1094,7 +1415,8 @@ class DebateManager:
                 "\n\n_Response stopped early because the provider interrupted the continuation. "
                 "Try increasing this role's Max tokens or retrying the message._"
             )
-            await websocket.send_json(
+            await self._send_json(
+                websocket,
                 {"type": "message_delta", "stream_id": stream_id, "delta": notice}
             )
             return f"{existing_content}{separator}{notice}"
@@ -1105,7 +1427,8 @@ class DebateManager:
                 "\n\n_Response reached the max-token limit. Increase this role's Max tokens "
                 "in Chat Settings for a fuller answer._"
             )
-            await websocket.send_json(
+            await self._send_json(
+                websocket,
                 {"type": "message_delta", "stream_id": stream_id, "delta": notice}
             )
             combined = f"{combined}{notice}"
@@ -1142,7 +1465,8 @@ class DebateManager:
         for word in content.split(" "):
             delta = word + " "
             await asyncio.sleep(0.04)
-            await websocket.send_json(
+            await self._send_json(
+                websocket,
                 {"type": "message_delta", "stream_id": stream_id, "delta": delta}
             )
         return content.strip()
@@ -1263,74 +1587,6 @@ class DebateManager:
             },
         ]
 
-    def _debater_messages(
-        self,
-        topic: str,
-        role_definition: dict[str, str],
-        round_number: int,
-        transcript: list[dict[str, Any]],
-        session_settings: dict[str, Any],
-    ) -> list[dict[str, str]]:
-        latest_speaker = transcript[-1]["speaker"] if transcript else "the previous speaker"
-        previous_debate = self._format_transcript(
-            self._context_slice(transcript, int(session_settings.get("context_window", 2)))
-        )
-        response_length = session_settings.get("response_length", "Normal")
-        word_limit = {"Concise": 120, "Normal": 180, "Detailed": 260}.get(response_length, 180)
-        advanced_notes = []
-        if role_definition["role"] == "researcher" and session_settings.get("researcher_web_search"):
-            advanced_notes.append(
-                "Researcher web-search mode is enabled; when no live source is available, mark claims that need outside verification instead of inventing citations."
-            )
-        if session_settings.get("fact_check_mode"):
-            advanced_notes.append(
-                "Fact-check mode is enabled; flag uncertain factual claims and separate evidence from interpretation."
-            )
-        advanced_prompt = "\n".join(advanced_notes) or "No extra advanced constraints."
-        if round_number == 1:
-            user_prompt = dedent(
-                f"""
-                Topic: {topic}
-
-                Give your opening argument as {role_definition["speaker"]}.
-                Keep it under {word_limit} words, use concrete reasoning, and end with one pressure-test question for the council.
-                """
-            ).strip()
-        else:
-            user_prompt = dedent(
-                f"""
-                Topic: {topic}
-
-                Debate so far:
-                {previous_debate}
-
-                Respond as {role_definition["speaker"]}. Strengthen your position, address at least one opposing point,
-                answer {latest_speaker} directly when useful, and avoid phrases like "my opponent says" or "the opponent argues".
-                and keep the turn under {word_limit} words.
-                """
-            ).strip()
-
-        return [
-            {
-                "role": "system",
-                "content": dedent(
-                    f"""
-                    You are {role_definition["speaker"]} in an AI debate council.
-                    Your job: {role_definition["stance"]}
-                    Debate tone: {session_settings.get("debate_tone", "Academic")}.
-                    Language: {session_settings.get("language", "English")}.
-                    You are already this council role. Never say the user wants you to act as this role.
-                    Never expose hidden reasoning, chain-of-thought, planning notes, or <think> blocks.
-                    Advanced constraints: {advanced_prompt}
-                    Use polished Markdown for headings, lists, and emphasis when useful.
-                    Be rigorous, concrete, and avoid generic filler.
-                    Use direct in-room debate language. Say "you said..." or use speaker names instead of "my opponent" or "the opponent".
-                    """
-                ).strip(),
-            },
-            {"role": "user", "content": user_prompt},
-        ]
-
     def _judge_messages(
         self,
         topic: str,
@@ -1397,6 +1653,7 @@ class DebateManager:
         generation_settings: dict[str, Any],
     ) -> list[dict[str, str]]:
         history = self.db.list_messages(session_id, include_hidden=True)[-18:]
+        system_context = self._system_context(session_id)
         formatted_history = "\n".join(
             f"{message['speaker']} ({message['role']}): {message['content']}"
             for message in history
@@ -1410,11 +1667,16 @@ class DebateManager:
                     You are the AI Debate Council assistant for this chat.
                     Answer normal chat messages directly and use the chat memory below when relevant.
                     If the user asks about a past debate, explain the result from memory.
+                    If the user asks about this app, its architecture, how routing/debates work, logs, terminal output, or recent errors, use the system context below.
+                    Do not invent terminal output. If the diary does not contain the requested detail, say what is available and ask the user to paste the missing terminal lines.
                     Do not start a new debate unless the user clearly asks for debate, comparison, pros/cons, or multiple sides.
                     Never expose hidden reasoning, planning notes, or <think> blocks.
                     Tone: {session_settings.get("debate_tone", "Academic")}.
                     Language: {session_settings.get("language", "English")}.
                     Response length: {generation_settings.get("response_length", "Normal")}.
+
+                    System context:
+                    {system_context}
                     """
                 ).strip(),
             },
@@ -1432,92 +1694,323 @@ class DebateManager:
             },
         ]
 
+    def _system_context(self, session_id: str | None = None) -> str:
+        return dedent(
+            f"""
+            Application architecture facts:
+            - Backend: Python 3.13, FastAPI, SQLite, WebSockets, LiteLLM model routing.
+            - Frontend: Next.js, React, TypeScript, Tailwind CSS.
+            - Model availability: built-in MODEL_MAP maps each supported model to one provider. API keys unlock provider model groups; model names do not go in .env.
+            - Routing: each user message first passes a balanced safety lock, then an AI-first intent router decides Council Assistant chat vs multi-agent debate unless Council Assistant Always On is enabled.
+            - Debate engine: two teams, Pro and Con, with 1-4 debaters per team. Roles can include Lead Advocate, Rebuttal Critic, Evidence Researcher, and Cross-Examiner.
+            - Neutral agents: optional Judge Assistant audits missed points and evidence gaps; Judge produces the final verdict.
+            - Limits: max 10 chat sessions and max 3 simultaneous debates.
+            - Chat settings are per-chat. Changes apply to the next AI message/turn, not a role that is already streaming.
+            - Graphs and Statistics are computed from the saved debate transcript. They are not prefilled with fake role data.
+            - Costs shown in the UI are estimates from tracked prompt/output text and built-in model price data, not provider invoices.
+            - Runtime diary scope: backend events are captured by the FastAPI app. Frontend UI/socket events are captured only when the browser reports them through /api/runtime-diary. External terminal lines that were never captured are not visible.
+
+            Recent runtime diary:
+            {runtime_diary.format_for_prompt(limit=24, session_id=session_id)}
+            """
+        ).strip()
+
+    async def _safety_lock_assessment(
+        self,
+        content: str,
+        model: SupportedModel,
+        cost_tracker: CostTracker | None = None,
+        *,
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
+        if not settings.mock_llm and acompletion is not None and model.api_key:
+            try:
+                messages = self._safety_lock_messages(content)
+                response = await acompletion(
+                    model=model.litellm_model,
+                    messages=messages,
+                    api_key=model.api_key,
+                    stream=False,
+                    temperature=0.0,
+                    max_tokens=120,
+                    timeout=min(settings.request_timeout_seconds, 30),
+                )
+                text = self._completion_text(response).strip()
+                if cost_tracker is not None:
+                    cost_tracker.record_call(
+                        model_name=model.name,
+                        input_text=message_input_text(messages),
+                        output_text=text,
+                        operation="safety_lock",
+                    )
+                parsed = self._parse_safety_response(text)
+                if parsed:
+                    return parsed
+            except Exception as exc:
+                runtime_diary.record(
+                    "backend terminal",
+                    "safety lock classifier fallback",
+                    f"AI safety classifier failed, using local fallback: {exc}",
+                    session_id=session_id,
+                )
+        return self._fallback_safety_assessment(content)
+
+    def _safety_lock_messages(self, content: str) -> list[dict[str, str]]:
+        return [
+            {
+                "role": "system",
+                "content": dedent(
+                    """
+                    You are a minimal safety lock for AI Debate Council. Your job is not to be strict.
+                    Allow normal conversations, controversial topics, political debate, ethics, history, news,
+                    fiction, high-level explanations, prevention, safety education, and requests that are merely uncomfortable.
+
+                    Return ASSIST only for extreme cases where the user is requesting actionable help for serious harm or abuse,
+                    such as making weapons/explosives, committing violence, encouraging self-harm, sexual exploitation of minors,
+                    malware/credential theft, fraud, stalking, evading capture, or other operational wrongdoing.
+
+                    If uncertain, choose ALLOW. Do not block just because a message contains scary words.
+                    Return strict JSON only: {"action":"allow","category":"none","reason":"short reason"}
+                    or {"action":"assist","category":"short category","reason":"short reason"}
+                    """
+                ).strip(),
+            },
+            {"role": "user", "content": content},
+        ]
+
+    def _parse_safety_response(self, text: str) -> dict[str, Any] | None:
+        payload = self._parse_json_object(text)
+        if not payload:
+            return None
+        raw_action = str(
+            payload.get("action") or payload.get("route") or payload.get("decision") or "allow"
+        ).lower()
+        action = "assist" if raw_action in {"assist", "block", "blocked", "unsafe"} else "allow"
+        return {
+            "action": action,
+            "category": str(payload.get("category") or "none"),
+            "reason": str(payload.get("reason") or "No specific reason provided."),
+        }
+
+    def _fallback_safety_assessment(self, content: str) -> dict[str, Any]:
+        lower = content.lower()
+        extreme_patterns = (
+            (r"\b(how\s+to|step\s*by\s*step|instructions|recipe|build|make|construct|assemble)\b.{0,80}\b(bomb|explosive|grenade|pipe\s*bomb)\b", "weapons/explosives"),
+            (r"\b(kill\s+yourself|convince\s+someone\s+to\s+kill\s+themselves|encourage\s+suicide)\b", "self-harm encouragement"),
+            (r"\b(child\s+porn|csam|sexual\s+images\s+of\s+children)\b", "child sexual exploitation"),
+            (r"\b(write|create|build|give\s+me|make)\b.{0,80}\b(ransomware|malware|keylogger|credential\s+stealer)\b", "cyber abuse"),
+            (r"\b(steal|phish|hack\s+into|break\s+into)\b.{0,80}\b(password|account|bank|email|wallet)\b", "credential theft"),
+            (r"\b(how\s+to|step\s*by\s*step|instructions)\b.{0,80}\b(poison\s+someone|hide\s+a\s+body|evade\s+police)\b", "violent wrongdoing"),
+        )
+        for pattern, category in extreme_patterns:
+            if re.search(pattern, lower, flags=re.DOTALL):
+                return {
+                    "action": "assist",
+                    "category": category,
+                    "reason": f"The request appears to ask for actionable help with {category}.",
+                }
+        return {"action": "allow", "category": "none", "reason": "No extreme unsafe request detected."}
+
+    def _safety_lock_message(self, safety: dict[str, Any]) -> str:
+        category = str(safety.get("category") or "serious harm")
+        reason = str(safety.get("reason") or "the request asks for actionable unsafe help")
+        return dedent(
+            f"""
+            I can't start a debate or generate instructions for this request because {reason}
+
+            I can still help in safer ways, for example:
+            - discuss the ethics, laws, or risks at a high level
+            - explain prevention, detection, or harm-reduction steps
+            - reframe it into a safe debate topic about policy, safety, or accountability
+
+            Category: {category}
+            """
+        ).strip()
+
     async def _classify_intent(
-        self, content: str, model: SupportedModel, session_settings: dict[str, Any]
+        self,
+        content: str,
+        model: SupportedModel,
+        session_settings: dict[str, Any],
+        cost_tracker: CostTracker | None = None,
+        *,
+        session_id: str | None = None,
     ) -> str:
-        heuristic = self._heuristic_intent(content)
-        if heuristic == "debate":
-            return "debate"
-        if heuristic == "chat":
-            return "chat"
-        if settings.mock_llm or acompletion is None:
-            return "chat"
-        try:
-            response = await acompletion(
-                model=model.litellm_model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "Classify the user's message as exactly one word: debate or chat. "
-                            "Use debate for requests asking multiple sides, pros and cons, comparisons, policy judgment, "
-                            "or explicit debate. Use chat for greetings, follow-up questions, clarifications, and simple help."
-                        ),
-                    },
-                    {"role": "user", "content": content},
-                ],
-                api_key=model.api_key,
-                stream=False,
-                temperature=0.0,
-                max_tokens=3,
-                timeout=min(settings.request_timeout_seconds, 30),
+        if not settings.mock_llm and acompletion is not None and model.api_key:
+            try:
+                messages = self._intent_classifier_messages(content, session_id)
+                response = await acompletion(
+                    model=model.litellm_model,
+                    messages=messages,
+                    api_key=model.api_key,
+                    stream=False,
+                    temperature=0.0,
+                    max_tokens=80,
+                    timeout=min(settings.request_timeout_seconds, 30),
+                )
+                text = self._completion_text(response).strip()
+                if cost_tracker is not None:
+                    cost_tracker.record_call(
+                        model_name=model.name,
+                        input_text=message_input_text(messages),
+                        output_text=text,
+                        operation="router",
+                    )
+                parsed_intent = self._parse_intent_response(text)
+                if parsed_intent:
+                    return parsed_intent
+            except Exception:
+                pass
+
+        fallback = self._heuristic_intent(content)
+        return "debate" if fallback == "debate" else "chat"
+
+    def _intent_classifier_messages(
+        self, content: str, session_id: str | None
+    ) -> list[dict[str, str]]:
+        recent_history = ""
+        if session_id:
+            history = self.db.list_messages(session_id, include_hidden=True)[-8:]
+            recent_history = "\n".join(
+                f"{message['speaker']} ({message['role']}): {self._clip_for_prompt(message['content'], 240)}"
+                for message in history
             )
-            text = self._completion_text(response).strip().lower()
-            return "debate" if "debate" in text else "chat"
-        except Exception:
-            fallback = self._heuristic_intent(content)
-            return "chat" if fallback == "ambiguous" else fallback
+        return [
+            {
+                "role": "system",
+                "content": dedent(
+                    """
+                    You are the intent router for AI Debate Council.
+                    Decide whether this exact user message should launch a new formal multi-agent debate,
+                    or whether the Council Assistant should answer it as normal chat.
+
+                    Choose DEBATE only when the user is clearly asking the debater teams to debate now,
+                    or when the message is a standalone debatable topic/proposition meant for the debate room.
+                    Choose CHAT for greetings, setup questions, commands, bug reports, explanations, follow-ups,
+                    personal/local advice, questions about previous debates, and messages that merely mention
+                    the word "debate" without requesting a new debate.
+
+                    Do not route by keywords. Use the user's actual intent. If uncertain, choose CHAT.
+                    Return strict JSON only: {"intent":"debate","reason":"short reason"}
+                    or {"intent":"chat","reason":"short reason"}
+                    """
+                ).strip(),
+            },
+            {
+                "role": "user",
+                "content": dedent(
+                    f"""
+                    Recent chat memory:
+                    {recent_history or "No previous messages."}
+
+                    Current user message:
+                    {content}
+
+                    Examples:
+                    - "Please debate whether schools should ban phones." -> debate
+                    - "Should cities ban private cars downtown?" -> debate
+                    - "Why did it start a debate when I typed the word debate?" -> chat
+                    - "Can you tell me whether I should use port 6001?" -> chat
+                    - "Explain the judge's final result from the last debate." -> chat
+                    """
+                ).strip(),
+            },
+        ]
+
+    def _parse_intent_response(self, text: str) -> str | None:
+        payload = self._parse_json_object(text)
+        raw_intent = ""
+        if payload:
+            raw_intent = str(
+                payload.get("intent") or payload.get("mode") or payload.get("route") or ""
+            )
+        else:
+            raw_intent = text
+        normalized = re.sub(r"[^a-z]+", " ", raw_intent.lower()).strip()
+        tokens = set(normalized.split())
+        if "chat" in tokens:
+            return "chat"
+        if "debate" in tokens:
+            return "debate"
+        return None
 
     def _heuristic_intent(self, content: str) -> str:
         lower = content.lower().strip()
-        direct_chat_markers = (
-            "hello",
-            "hi",
-            "thanks",
-            "thank you",
-            "explain",
-            "summarize",
-            "what did",
-            "what should i",
-            "what command",
-            "can you tell me",
-            "how do i",
-            "how do we",
-            "setup",
-            "run it",
-            "start the program",
+        direct_chat_patterns = (
+            r"^(hello|hi|hey)\b",
+            r"^(thanks|thank you)\b",
+            r"^explain\b",
+            r"^summarize\b",
+            r"^what\s+did\b",
+            r"^what\s+does\b",
+            r"^why\b",
+            r"^what\s+should\s+i\b",
+            r"^what\s+command\b",
+            r"^can\s+you\s+tell\s+me\b",
+            r"^how\s+do\s+i\b",
+            r"^how\s+do\s+we\b",
+            r"\bsetup\b",
+            r"\brun\s+it\b",
+            r"\bstart\s+the\s+program\b",
         )
-        explicit_debate_markers = (
-            "debate",
-            "let them debate",
-            "let it debate",
-            "start a debate",
-            "run a debate",
-            "argue both sides",
-            "pro and con",
-            "for and against",
-            "pros and cons",
-        )
-        debate_markers = (
-            "argue",
-            "whether",
-            "should ",
-            " vs ",
-            "versus",
-            "which is better",
-        )
-        if any(marker in lower for marker in explicit_debate_markers):
-            return "debate"
-        if any(marker in lower for marker in direct_chat_markers):
+        if any(re.search(pattern, lower) for pattern in direct_chat_patterns):
             return "chat"
-        if any(marker in lower for marker in debate_markers):
+        explicit_debate_patterns = (
+            r"^(please\s+)?debate\b",
+            r"\blet\s+(them|it|the council|the debaters)\s+debate\b",
+            r"\bstart\s+(a\s+)?debate\b",
+            r"\brun\s+(a\s+)?debate\b",
+            r"\bargue\s+both\s+sides\b",
+            r"\bpro\s+and\s+con\b",
+            r"\bfor\s+and\s+against\b",
+            r"\bpros\s+and\s+cons\b",
+        )
+        if any(re.search(pattern, lower) for pattern in explicit_debate_patterns):
+            return "debate"
+        if self._looks_like_standalone_debate_topic(lower):
             return "debate"
         return "ambiguous"
+
+    def _looks_like_standalone_debate_topic(self, lower: str) -> bool:
+        chat_question_starts = (
+            "can you",
+            "could you",
+            "would you",
+            "what ",
+            "why ",
+            "how ",
+            "tell me",
+            "explain",
+        )
+        if lower.startswith(chat_question_starts):
+            return False
+        if len(lower.split()) > 24:
+            return False
+        return bool(
+            re.search(r"\bshould\b", lower)
+            or re.search(r"\bwhether\b", lower)
+            or re.search(r"\bversus\b|\bvs\b", lower)
+            or "which is better" in lower
+        )
 
     def _context_slice(self, transcript: list[dict[str, Any]], context_window: int) -> list[dict[str, Any]]:
         if context_window <= 0:
             return []
-        return transcript[-context_window * 8 :]
+        turn_limit = min(context_window * 8, 24)
+        char_budget = 12000
+        per_turn_limit = 1200
+        selected: list[dict[str, Any]] = []
+        used_chars = 0
+        for turn in reversed(transcript[-turn_limit:]):
+            content = str(turn.get("content", ""))
+            if len(content) > per_turn_limit:
+                content = f"{content[:per_turn_limit].rstrip()}..."
+            projected = used_chars + len(content)
+            if selected and projected > char_budget:
+                break
+            selected.append({**turn, "content": content})
+            used_chars = projected
+        return list(reversed(selected))
 
     def _format_transcript(self, transcript: list[dict[str, Any]]) -> str:
         if not transcript:
@@ -1611,7 +2104,7 @@ class StreamingSanitizer:
             text = text[start_index + len("<think>") :]
             self.in_think = True
 
-        return sanitize_model_text("".join(output), remove_partial_meta=False)
+        return sanitize_model_text("".join(output), remove_partial_meta=False, strip_edges=False)
 
     def flush(self) -> str:
         if self.in_think:
@@ -1619,10 +2112,12 @@ class StreamingSanitizer:
             return ""
         tail = self.pending
         self.pending = ""
-        return sanitize_model_text(tail, remove_partial_meta=False)
+        return sanitize_model_text(tail, remove_partial_meta=False, strip_edges=False)
 
 
-def sanitize_model_text(text: str, *, remove_partial_meta: bool = True) -> str:
+def sanitize_model_text(
+    text: str, *, remove_partial_meta: bool = True, strip_edges: bool = True
+) -> str:
     cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.IGNORECASE | re.DOTALL)
     cleaned = re.sub(r"</?think>", "", cleaned, flags=re.IGNORECASE)
     if remove_partial_meta:
@@ -1631,4 +2126,4 @@ def sanitize_model_text(text: str, *, remove_partial_meta: bool = True) -> str:
             "",
             cleaned,
         )
-    return cleaned.strip()
+    return cleaned.strip() if strip_edges else cleaned

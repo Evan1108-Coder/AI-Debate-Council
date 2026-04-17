@@ -36,6 +36,9 @@ class SessionSettingsUpdate(BaseModel):
     auto_scroll: bool | None = None
     show_timestamps: bool | None = None
     show_token_count: bool | None = None
+    show_money_cost: bool | None = None
+    cost_currency: str | None = Field(default=None, max_length=3)
+    show_model_costs: bool | None = None
     context_window: int | None = Field(default=None, ge=0, le=6)
     debate_rounds: int | None = Field(default=None, ge=1, le=6)
     researcher_web_search: bool | None = None
@@ -66,5 +69,6 @@ class DebateMessage(BaseModel):
     speaker: str
     model: str
     content: str
+    cost_summary: dict | None = None
     sequence: int
     created_at: str

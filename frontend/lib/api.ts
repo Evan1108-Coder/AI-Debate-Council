@@ -116,6 +116,26 @@ export function getSessionAnalytics(sessionId: string, debateId?: string) {
   return request<DebateAnalytics>(`/api/sessions/${sessionId}/analytics${suffix}`);
 }
 
+export async function recordRuntimeDiary(
+  event: string,
+  detail: string,
+  sessionId?: string
+) {
+  try {
+    await request<{ ok: boolean }>("/api/runtime-diary", {
+      method: "POST",
+      body: JSON.stringify({
+        source: "frontend/browser",
+        event,
+        detail,
+        session_id: sessionId ?? null
+      })
+    });
+  } catch {
+    // Diary reporting should never interrupt the user's workflow.
+  }
+}
+
 function formatApiError(value: unknown): string {
   if (typeof value === "string") {
     return value;

@@ -385,8 +385,10 @@ python -m pip install --upgrade pip
 pip install -r backend/requirements.txt
 cp .env.example .env
 # Edit .env to add at least one provider API key
-uvicorn backend.app.main:app --reload --port 8000
+.venv/bin/python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
 ```
+
+Using `.venv/bin/python -m uvicorn` is the most reliable local command because it uses the Uvicorn installed inside this project's virtual environment, even if the plain `uvicorn` command is not on your shell PATH.
 
 ```bash
 # Terminal 2: Frontend

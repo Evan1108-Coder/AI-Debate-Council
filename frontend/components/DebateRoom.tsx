@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type {
   ChatSession,
+  CostSummary,
   DebateAnalytics,
   DebateAssignment,
   DebateMessage,
@@ -70,6 +71,8 @@ const panels: Array<{ id: RoomPanel; label: string }> = [
   { id: "stats", label: "Graphs & Statistics" },
   { id: "settings", label: "Chat Settings" }
 ];
+
+const costCurrencies = ["USD", "CNY", "HKD", "EUR", "JPY", "GBP", "AUD", "CAD", "SGP"];
 
 const teamRoleSettings = [
   {
@@ -478,7 +481,47 @@ function MessageBubble({
         ) : null}
       </div>
       <MarkdownText text={message.content || "Thinking..."} />
+      <CostBox summary={message.cost_summary} settings={settings} />
     </article>
+  );
+}
+
+function CostBox({
+  summary,
+  settings
+}: {
+  summary: CostSummary | null | undefined;
+  settings: SessionSettings | null;
+}) {
+  if (!summary || !settings?.show_money_cost) {
+    return null;
+  }
+  return (
+    <div className="mt-3 rounded-md border border-zinc-300 bg-zinc-50 px-3 py-2 text-xs text-zinc-700">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="font-semibold text-zinc-900">
+          Estimated cost: {formatCost(summary.total, summary.currency)}
+        </span>
+        <span>
+          {summary.calls} call(s), {summary.input_tokens} input tokens, {summary.output_tokens} output tokens
+        </span>
+      </div>
+      {settings.show_model_costs && summary.models.length > 0 ? (
+        <div className="mt-2 divide-y divide-zinc-200">
+          {summary.models.map((item) => (
+            <div key={item.model} className="flex flex-wrap justify-between gap-2 py-1">
+              <span className="font-medium text-zinc-800">{item.model}</span>
+              <span>
+                {formatCost(item.cost, summary.currency)} · {item.calls} call(s) · {item.input_tokens} in / {item.output_tokens} out
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      <p className="mt-1 text-[11px] text-zinc-500">
+        Estimated from visible text tokens and provider list prices; final provider billing can differ.
+      </p>
+    </div>
   );
 }
 
@@ -938,6 +981,26 @@ function SettingsPanel({
               value={settings.show_token_count}
               onChange={(value) => onSettingsChange({ show_token_count: value })}
             />
+            <ToggleSetting
+              label="Show money cost"
+              value={settings.show_money_cost}
+              onChange={(value) => onSettingsChange({ show_money_cost: value })}
+            />
+            {settings.show_money_cost ? (
+              <>
+                <SelectSetting
+                  label="Dollar type"
+                  value={settings.cost_currency}
+                  options={costCurrencies}
+                  onChange={(value) => onSettingsChange({ cost_currency: value })}
+                />
+                <ToggleSetting
+                  label="Show cost of every model"
+                  value={settings.show_model_costs}
+                  onChange={(value) => onSettingsChange({ show_model_costs: value })}
+                />
+              </>
+            ) : null}
           </div>
         </Panel>
 
@@ -1444,6 +1507,23 @@ function renderInline(text: string) {
 
 function estimateTokens(text: string) {
   return Math.ceil(text.trim().split(/\s+/).filter(Boolean).length * 1.3);
+}
+
+function formatCost(value: number, currency: string) {
+  const symbols: Record<string, string> = {
+    USD: "$",
+    CNY: "¥",
+    HKD: "HK$",
+    EUR: "€",
+    JPY: "¥",
+    GBP: "£",
+    AUD: "A$",
+    CAD: "C$",
+    SGP: "S$"
+  };
+  const normalized = currency in symbols ? currency : "USD";
+  const decimals = normalized === "JPY" ? 4 : 6;
+  return `${symbols[normalized]}${Number(value || 0).toFixed(decimals)} ${normalized}`;
 }
 
 function maxVote(analytics: DebateAnalytics) {

@@ -152,13 +152,30 @@ Then activate again:
 Always run the backend from the **project root**, not from inside `backend/`:
 
 ```bash
-# Correct (from project root)
-uvicorn backend.app.main:app --reload --port 8000
+# Correct on macOS/Linux, from project root
+.venv/bin/python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
 
 # Wrong (from inside backend/)
 cd backend
 uvicorn app.main:app --reload --port 8000   # This may fail
 ```
+
+On Windows PowerShell, use:
+
+```powershell
+.\.venv\Scripts\python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+### `uvicorn: command not found`
+
+This usually means Uvicorn is installed inside the project's virtual environment, but your shell PATH is not currently pointing at that environment. Start the backend with the venv Python module command instead:
+
+```bash
+cd "/Users/EvanLu/AI Debate Council - MultiAI System - CodeX"
+.venv/bin/python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+You can also activate the virtual environment first and then use `python -m uvicorn ...`, but the explicit `.venv/bin/python -m uvicorn ...` command is the safest copy-paste version.
 
 If you get `ModuleNotFoundError: No module named 'backend'`, you are not in the project root.
 
@@ -192,7 +209,7 @@ Check the uvicorn terminal for traceback details. Common causes:
 Error:
 
 ```text
-ERROR:    [Errno 48] error while attempting to bind on address ('0.0.0.0', 8000): address already in use
+ERROR:    [Errno 48] error while attempting to bind on address ('127.0.0.1', 8000): address already in use
 ```
 
 **Option 1**: Kill the process using port 8000:
@@ -209,7 +226,7 @@ taskkill /PID <PID> /F
 **Option 2**: Use a different port:
 
 ```bash
-uvicorn backend.app.main:app --reload --port 8001
+.venv/bin/python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8001
 ```
 
 Then create `frontend/.env.local`:

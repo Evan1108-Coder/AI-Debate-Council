@@ -49,7 +49,9 @@ class Settings:
         return list(dict.fromkeys(origins))
 
     @property
-    def cors_origin_regex(self) -> str:
+    def cors_origin_regex(self) -> str | None:
+        if os.getenv("ALLOW_LOCALHOST_PORTS", "false").lower() not in {"1", "true", "yes", "on"}:
+            return None
         return r"http://(localhost|127\.0\.0\.1):[0-9]+"
 
 

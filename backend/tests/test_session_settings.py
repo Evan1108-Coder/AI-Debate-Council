@@ -74,6 +74,67 @@ class SessionSettingsTests(unittest.TestCase):
         self.assertEqual(updated["agent_settings"]["lead_advocate"]["max_tokens"], 2000)
         self.assertEqual(updated["agent_settings"]["lead_advocate"]["response_length"], "Normal")
 
+    def test_legacy_role_models_are_normalized_to_v2_agent_keys(self) -> None:
+        session = self.db.create_session(max_sessions=10)
+
+        updated = self.db.update_session_settings(
+            session["id"],
+            {
+                "role_models": {
+                    "critic": "gpt-4o",
+                    "researcher": "claude-sonnet-4-6",
+                    "judge": "gpt-4o-mini",
+                }
+            },
+        )
+
+        self.assertNotIn("critic", updated["role_models"])
+        self.assertEqual(updated["role_models"]["rebuttal_critic"], "gpt-4o")
+        self.assertEqual(updated["role_models"]["evidence_researcher"], "claude-sonnet-4-6")
+        self.assertEqual(updated["agent_settings"]["rebuttal_critic"]["model"], "gpt-4o")
+        self.assertEqual(updated["agent_settings"]["evidence_researcher"]["model"], "claude-sonnet-4-6")
+        self.assertEqual(updated["agent_settings"]["judge"]["model"], "gpt-4o-mini")
+
+    def test_cost_display_settings_are_saved_per_chat(self) -> None:
+        first = self.db.create_session(max_sessions=10)
+        second = self.db.create_session(max_sessions=10)
+
+        updated = self.db.update_session_settings(
+            first["id"],
+            {
+                "show_money_cost": False,
+                "cost_currency": "CNY",
+                "show_model_costs": True,
+            },
+        )
+        other = self.db.get_session_settings(second["id"])
+
+        self.assertFalse(updated["show_money_cost"])
+        self.assertEqual(updated["cost_currency"], "CNY")
+        self.assertTrue(updated["show_model_costs"])
+        self.assertTrue(other["show_money_cost"])
+        self.assertEqual(other["cost_currency"], "USD")
+        self.assertFalse(other["show_model_costs"])
+
+    def test_message_cost_summary_round_trips(self) -> None:
+        session = self.db.create_session(max_sessions=10)
+        debate = self.db.create_debate(session["id"], "Cost test", mode="chat")
+        summary = {"currency": "USD", "total": 0.001, "models": []}
+
+        saved = self.db.add_message(
+            session_id=session["id"],
+            debate_id=debate["id"],
+            role="assistant",
+            speaker="Council Assistant",
+            model="gpt-4o-mini",
+            content="Done.",
+            cost_summary=summary,
+        )
+        listed = self.db.list_messages(session["id"])
+
+        self.assertEqual(saved["cost_summary"], summary)
+        self.assertEqual(listed[0]["cost_summary"], summary)
+
     def test_existing_settings_table_is_migrated_for_overall_model(self) -> None:
         legacy_path = Path(self.temp_dir.name) / "legacy.db"
         connection = sqlite3.connect(legacy_path)

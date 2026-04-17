@@ -1,4 +1,5 @@
 import unittest
+import json
 
 from backend.app.analytics import analyze_debate, format_analytics_report
 
@@ -107,6 +108,29 @@ class DebateAnalyticsTests(unittest.TestCase):
         self.assertEqual(set(role_weights), {"pro_lead_advocate", "con_rebuttal_critic"})
         self.assertNotIn("evidence_researcher", role_weights)
         self.assertNotIn("cross_examiner", role_weights)
+
+    def test_argument_graph_is_json_serializable(self) -> None:
+        analysis = analyze_debate(
+            "Should schools ban phones?",
+            [
+                {
+                    "speaker": "Pro Lead Advocate",
+                    "role": "pro_lead_advocate",
+                    "round": 1,
+                    "model": "gpt-4o-mini",
+                    "content": "Schools should ban phones because attention and classroom evidence improve.",
+                },
+                {
+                    "speaker": "Con Lead Advocate",
+                    "role": "con_lead_advocate",
+                    "round": 1,
+                    "model": "gpt-4o-mini",
+                    "content": "Schools should not ban phones because safety and family contact matter.",
+                },
+            ],
+        )
+
+        json.dumps(analysis["argument_graph"])
 
 
 if __name__ == "__main__":
