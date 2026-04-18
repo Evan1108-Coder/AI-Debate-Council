@@ -582,6 +582,10 @@ Try:
 - Setting debaters per team to 2 or 3. Four debaters per team produces a longer professional flow.
 - Keeping response length concise for Critic, Researcher, and Examiner roles.
 
+### Message Too Long
+
+The app enforces a 5500-character limit on user messages. The frontend shows a live character counter below the text area. At 5000 characters a warning appears; above 5500 the Send button is disabled. Shorten your message or split it into multiple messages.
+
 ### Response Gets Truncated
 
 If a message ends with "_Response reached the max-token limit..._":
@@ -657,6 +661,10 @@ The debate uses multiple streamed model calls sequentially. Each turn waits for 
 - **Use faster models**: `gpt-4o-mini`, `claude-haiku-4-5`, `gemini-2.5-flash-lite`, and `llama-3.3-70b` are generally faster than their larger counterparts.
 - **Use Groq**: Groq's inference is very fast for Llama models.
 - **Increase timeout**: If turns are timing out, increase `LITELLM_TIMEOUT_SECONDS` in `.env`.
+
+### Session Charts Are Empty
+
+The session-level charts (Win Rate, Cost by Phase, Debate Duration, Messages per Role, Citations) populate from saved debate data. They require at least one completed debate. The Cost by Phase chart requires cost tracking data from model calls — mock mode records zero-cost entries, so the chart may appear empty until real model calls are made.
 
 ### Analytics Are Slow
 

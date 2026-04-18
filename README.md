@@ -52,13 +52,15 @@ The backend is Python 3.13, FastAPI, SQLite, WebSockets, and LiteLLM. The fronte
 - **Real-time analytics updates** streamed after each debater turn.
 - **Visual charts**: Bayesian pie chart, role weight bars, stance vote bars, Bayesian trend line chart, and argument mining details.
 - **Per-debate statistics**: Switch between saved debates in the stats panel.
+- **Session-level charts**: Win Rate by Team, Cost Breakdown by Phase, Debate Duration, Messages per Role, and a Citation Box that collects URLs cited by Evidence Researchers.
+- **Phase timeline**: The stats panel shows a visual phase progress bar with the current phase highlighted and completed/total counts.
 
 ### Cost Tracking
 
 - **Estimated API cost per debate**: The backend tracks token usage for every model call and estimates costs using built-in price tables for 20+ models.
 - **9 currencies**: USD, CNY, HKD, EUR, JPY, GBP, AUD, CAD, SGP. Currency is selectable per chat in Chat Settings.
-- **Cost summaries**: Council Assistant messages show their own estimated cost. Debate turns store individual costs for analytics, while the final Judge message also stores the overall debate total.
-- **CostBox display**: When "Show Money Cost" is enabled in Chat Settings, debate mode shows the overall debate cost after the Judge by default. Turn-by-turn debate costs appear only when "Show Every Message Cost In Debate" is enabled. An optional per-model breakdown is available via "Show Model Costs".
+- **Cost summaries**: Council Assistant messages show their own estimated cost. Debate turns store individual `cost_summary` for per-turn analytics, and the Judge message additionally stores a `debate_cost_summary` containing the overall debate total.
+- **CostBox display**: When "Show Money Cost" is enabled in Chat Settings, Council Assistant messages display their own estimated cost. In debate mode, the Judge message shows the overall debate cost by default (via `debate_cost_summary`). Turn-by-turn debate costs appear only when "Show Every Message Cost In Debate" is enabled. An optional per-model breakdown is available via "Show Model Costs".
 - **Token estimation**: A lightweight heuristic estimates tokens from text (with CJK-aware counting) without requiring a tokenizer library.
 
 ### Runtime Diary
@@ -74,6 +76,10 @@ The backend is Python 3.13, FastAPI, SQLite, WebSockets, and LiteLLM. The fronte
 - **Auto-reconnect**: If the WebSocket connection fails before the server starts responding, the frontend automatically retries up to 2 times with a 1.2-second delay between attempts.
 - **Graceful disconnect handling**: The backend uses a `safe_send_json()` helper that catches `WebSocketDisconnect` and `RuntimeError` on closed connections, preventing server crashes when a client disconnects mid-debate.
 - **`ClientDisconnectedError`**: The debate engine raises this custom error when it detects a client disconnect, allowing the WebSocket handler to clean up gracefully instead of logging a traceback.
+
+### Input Limits
+
+- **5500-character limit** on user messages. The frontend shows a live character counter, warns at 5000 characters, and blocks sending above 5500.
 
 ### Session Management
 
@@ -129,7 +135,7 @@ The backend is a single Python process. All state lives in SQLite. The active-de
 │   │   ├── model_registry.py    # MODEL_MAP, provider detection, SupportedModel
 │   │   ├── schemas.py           # Pydantic request/response models
 │   │   ├── config.py            # Settings from environment variables
-│   │   ├── analytics.py         # 10-method debate analysis engine
+│   │   ├── analytics.py         # 10-method debate analysis engine + session chart data
 │   │   ├── costing.py           # API cost estimation and currency conversion
 │   │   └── runtime_diary.py     # Event logging with automatic secret scrubbing
 │   ├── tests/
@@ -234,7 +240,7 @@ Each debate has two teams (Pro and Con) with 1 to 4 debaters per team. The numbe
 
 ### Streaming
 
-All debate content streams token by token over WebSocket. The frontend renders each delta as it arrives. A `StreamingSanitizer` strips any `<think>` blocks that some models emit, so reasoning traces never appear in the UI.
+All debate content streams token by token over WebSocket. The frontend renders each delta as it arrives. A `StreamingSanitizer` strips any `<think>` blocks that some models emit, so reasoning traces never appear in the UI. Each saved message includes phase metadata (`phase_key`, `phase_title`, `phase_index`, `phase_total`, `phase_kind`) so the UI can reconstruct the debate flow from saved messages.
 
 ### Truncation Handling
 
@@ -265,18 +271,27 @@ The backend includes a lightweight analytics engine in `backend/app/analytics.py
 
 The Graphs & Statistics panel shows:
 
+- **Phase timeline**: A visual progress bar showing each debate phase, the current phase, and completed/total counts.
 - **Metrics row**: Weighted vote, Bayesian leader, average confidence, Delphi convergence.
 - **Bayesian pie chart**: Support vs. oppose vs. mixed probabilities.
 - **Role weights bar chart**: MoE-normalized weights per active role.
 - **Stance votes bar chart**: Weighted vote totals per stance.
-- **Bayesian trend line chart**: Round-by-round probability history.
+- **Bayesian trend line chart**: Round-by-round probability history with labeled axes (X = analytics update number, Y = probability %).
 - **Game and graph stats**: Auction winner, Nash pressure, node count, edge counts.
+- **Session charts** (cross-debate):
+  - **Win Rate by Team**: Pro vs. Con win counts and rates across all completed debates in the session.
+  - **Cost Breakdown by Phase**: Estimated USD cost grouped by debate phase (Constructive, Cross-exam, Evidence, Rebuttal, Discussion, Closing, Judgment).
+  - **Debate Duration**: Wall-clock duration of each completed debate.
+  - **Messages per Role**: Pie chart showing message counts by role group (Advocate, Critic, Researcher, Examiner, Judge).
+  - **Citation Box**: URLs cited by Evidence Researchers across all debates, with speaker, debate name, phase, and domain.
 - **Argument mining details**: Evidence cue count, rebuttal cue count, redundant turn count, strongest mined claims.
 - **Attention terms**: Top 8 salient terms from the transcript.
 
 ## Chat Settings
 
 Each session stores its own settings. Changes take effect on the next turn — even mid-debate for settings like debaters per team. Settings are accessible from the Chat Settings panel in the UI.
+
+The settings panel is organized into sections: Overall Model, Debating Flow (debaters per team, discussion messages per team, debate rounds, with a live flow preview), Debaters & Teams (Judge Assistant toggle, per-agent overrides), Cost & Display, and Advanced.
 
 ### Session-Level Settings
 
@@ -392,9 +407,10 @@ Send `{"type": "start_interaction", "topic": "...", "model": "model-name"}` to b
 | `interaction_started` | Chat mode started. Includes mode and selected model. |
 | `message_started` | A new message is about to stream. Includes speaker, role, model, round. |
 | `message_delta` | A token chunk for the current stream. |
+| `message_replaced` | Replace the entire content of a streaming message (used on errors). |
 | `message_completed` | A message finished streaming. Includes the saved message record and `cost_summary`. |
 | `analysis_updated` | Analytics recalculated after a debater turn. |
-| `debate_completed` | Debate finished. Includes judge summary and active debate count. |
+| `debate_completed` | Debate finished. Includes judge summary, active debate count, and `cost_summary`. |
 | `interaction_completed` | Chat finished. Includes `cost_summary`. |
 | `error` | An error occurred. Includes error message string. |
 
