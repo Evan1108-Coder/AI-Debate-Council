@@ -15,6 +15,12 @@ export type DebateMessage = {
   model: string;
   content: string;
   cost_summary: CostSummary | null;
+  debate_cost_summary: CostSummary | null;
+  phase_key: string | null;
+  phase_title: string | null;
+  phase_index: number | null;
+  phase_total: number | null;
+  phase_kind: string | null;
   sequence: number;
   created_at: string;
 };
@@ -22,6 +28,7 @@ export type DebateMessage = {
 export type SessionSettings = {
   overall_model: string;
   debaters_per_team: number;
+  discussion_messages_per_team: number;
   judge_assistant_enabled: boolean;
   agent_settings: Record<
     string,
@@ -46,6 +53,7 @@ export type SessionSettings = {
   show_money_cost: boolean;
   cost_currency: string;
   show_model_costs: boolean;
+  show_every_message_cost_in_debate: boolean;
   context_window: number;
   debate_rounds: number;
   researcher_web_search: boolean;
@@ -200,6 +208,58 @@ export type DebateAnalytics = {
     topic: string;
     debate_count: number;
   };
+  phase?: {
+    current: {
+      key: string;
+      title: string;
+      kind: string;
+      index: number;
+      total: number;
+      speaker: string;
+      team: string;
+    } | null;
+    completed: number;
+    total: number;
+    flow_name: string;
+    sequence: Array<{
+      key: string;
+      title: string;
+      kind: string;
+      index: number;
+      total: number;
+      speaker: string;
+      team: string;
+    }>;
+    pro_position: string;
+    con_position: string;
+  };
+  session_charts?: {
+    win_rate_by_team: {
+      pro: number;
+      con: number;
+      unclear: number;
+      resolved: number;
+      total_completed: number;
+      pro_rate: number;
+      con_rate: number;
+    };
+    cost_by_phase: Record<string, number>;
+    debate_durations: Array<{
+      debate_id: string;
+      name: string;
+      status: string;
+      duration_seconds: number;
+    }>;
+    messages_by_role: Record<string, number>;
+    citations: Array<{
+      speaker: string;
+      url: string;
+      domain: string;
+      debate_id: string;
+      debate_name: string;
+      phase_title: string;
+    }>;
+  };
 };
 
 export type DebateEvent =
@@ -207,6 +267,7 @@ export type DebateEvent =
       type: "debate_started";
       debate: DebateRecord;
       topic: string;
+      positions?: { pro: string; con: string };
       selected_model: SupportedModel;
       assignments: DebateAssignment[];
       judge: { speaker: string; model: string; provider: string };

@@ -73,11 +73,13 @@ const panels: Array<{ id: RoomPanel; label: string }> = [
 ];
 
 const costCurrencies = ["USD", "CNY", "HKD", "EUR", "JPY", "GBP", "AUD", "CAD", "SGP"];
+const USER_INPUT_WARN_CHARS = 5000;
+const USER_INPUT_MAX_CHARS = 5500;
 
 const teamRoleSettings = [
   {
     key: "lead_advocate",
-    label: "Lead Advocate",
+    label: "Advocate",
     minDebaters: 1,
     description: "Builds the main case for each team."
   },
@@ -151,6 +153,7 @@ export function DebateRoom({
     Boolean(selectedSession) &&
     Boolean(selectedModelName) &&
     topic.trim().length > 0 &&
+    topic.length <= USER_INPUT_MAX_CHARS &&
     !isRunning &&
     unlockedModels.length > 0;
 
@@ -361,6 +364,9 @@ function Composer({
   onSend: () => void;
 }) {
   const unlockedModels = models?.models ?? [];
+  const charCount = topic.length;
+  const overHardLimit = charCount > USER_INPUT_MAX_CHARS;
+  const nearLimit = charCount >= USER_INPUT_WARN_CHARS && !overHardLimit;
   const modelsByProvider = unlockedModels.reduce<Record<string, typeof unlockedModels>>(
     (groups, model) => {
       const provider = model.provider_label;
@@ -436,11 +442,28 @@ function Composer({
             {isRunning ? "Working" : "Send"}
           </button>
         </div>
-        <p className="mt-2 text-sm text-zinc-600">
-          {models?.mock_mode
-            ? "Mock responses are enabled."
-            : `${models?.available_model_count ?? 0} unlocked model(s). One is required.`}
-        </p>
+        <div className="mt-2 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-sm text-zinc-600">
+            {models?.mock_mode
+              ? "Mock responses are enabled."
+              : `${models?.available_model_count ?? 0} unlocked model(s). One is required.`}
+          </p>
+          <p
+            className={`text-sm ${overHardLimit ? "font-semibold text-red-700" : nearLimit ? "text-amber-700" : "text-zinc-500"}`}
+          >
+            {charCount}/{USER_INPUT_MAX_CHARS} characters
+          </p>
+        </div>
+        {nearLimit ? (
+          <p className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            You are close to the 5500 character limit.
+          </p>
+        ) : null}
+        {overHardLimit ? (
+          <p className="mt-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">
+            This message is too long. Please shorten it to 5500 characters or less before sending.
+          </p>
+        ) : null}
       </div>
     </section>
   );
@@ -481,17 +504,63 @@ function MessageBubble({
         ) : null}
       </div>
       <MarkdownText text={message.content || "Thinking..."} />
-      <CostBox summary={message.cost_summary} settings={settings} />
+      <MessageCosts message={message} settings={settings} />
     </article>
+  );
+}
+
+function MessageCosts({
+  message,
+  settings
+}: {
+  message: DebateMessage;
+  settings: SessionSettings | null;
+}) {
+  if (!settings?.show_money_cost) {
+    return null;
+  }
+
+  const isCouncilAssistantMessage = message.role === "assistant";
+  const isDebateMessage =
+    message.role === "judge" ||
+    message.role === "judge_assistant" ||
+    message.role.startsWith("pro_") ||
+    message.role.startsWith("con_");
+
+  if (isCouncilAssistantMessage) {
+    return <CostBox summary={message.cost_summary} settings={settings} label="Estimated message cost" />;
+  }
+
+  if (!isDebateMessage) {
+    return null;
+  }
+
+  const showIndividual = settings.show_every_message_cost_in_debate;
+  const overallSummary = message.debate_cost_summary;
+  const fallbackOverall = message.role === "judge" && !overallSummary ? message.cost_summary : null;
+
+  return (
+    <>
+      {showIndividual ? (
+        <CostBox summary={message.cost_summary} settings={settings} label="Estimated message cost" />
+      ) : null}
+      <CostBox
+        summary={overallSummary ?? fallbackOverall}
+        settings={settings}
+        label="Estimated total debate cost"
+      />
+    </>
   );
 }
 
 function CostBox({
   summary,
-  settings
+  settings,
+  label = "Estimated cost"
 }: {
   summary: CostSummary | null | undefined;
   settings: SessionSettings | null;
+  label?: string;
 }) {
   if (!summary || !settings?.show_money_cost) {
     return null;
@@ -500,7 +569,7 @@ function CostBox({
     <div className="mt-3 rounded-md border border-zinc-300 bg-zinc-50 px-3 py-2 text-xs text-zinc-700">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="font-semibold text-zinc-900">
-          Estimated cost: {formatCost(summary.total, summary.currency)}
+          {label}: {formatCost(summary.total, summary.currency)}
         </span>
         <span>
           {summary.calls} call(s), {summary.input_tokens} input tokens, {summary.output_tokens} output tokens
@@ -590,6 +659,12 @@ function StatsPanel({
           </div>
         </div>
 
+        {analytics.phase ? (
+          <div className="mb-4">
+            <PhasePanel phase={analytics.phase} />
+          </div>
+        ) : null}
+
         <div className="grid gap-3 md:grid-cols-4">
           <Metric label="Weighted vote" value={analytics.ensemble.weighted_vote} />
           <Metric label="Bayesian leader" value={analytics.bayesian.leader} />
@@ -640,6 +715,36 @@ function StatsPanel({
           </Panel>
         </div>
 
+        {analytics.session_charts ? (
+          <>
+            <div className="mt-3 grid gap-3 xl:grid-cols-3">
+              <Panel title="Win Rate By Team In This Current Chat">
+                <WinRateChart data={analytics.session_charts.win_rate_by_team} />
+              </Panel>
+              <Panel title="Cost Breakdown By Phase">
+                <ValueBarChart
+                  values={analytics.session_charts.cost_by_phase}
+                  unit="USD"
+                  formatter={(value) => `$${value.toFixed(6)}`}
+                  emptyText="No per-phase cost has been recorded yet. New debates will fill this from saved model-call costs."
+                />
+              </Panel>
+              <Panel title="Debate Duration">
+                <DurationChart rows={analytics.session_charts.debate_durations} />
+              </Panel>
+            </div>
+
+            <div className="mt-3 grid gap-3 xl:grid-cols-[1fr_2fr]">
+              <Panel title="Messages Per Role">
+                <MessagesPieChart values={analytics.session_charts.messages_by_role} />
+              </Panel>
+              <Panel title="Citation Box">
+                <CitationBox citations={analytics.session_charts.citations} />
+              </Panel>
+            </div>
+          </>
+        ) : null}
+
         <div className="mt-3 grid gap-3 xl:grid-cols-2">
           <Panel title="Argument mining">
             <p className="text-sm text-zinc-700">
@@ -667,6 +772,169 @@ function StatsPanel({
         </div>
       </div>
     </section>
+  );
+}
+
+function PhasePanel({ phase }: { phase: NonNullable<DebateAnalytics["phase"]> }) {
+  const completed = Math.max(0, Math.min(phase.total || 0, phase.completed || 0));
+  const width = phase.total > 0 ? `${Math.round((completed / phase.total) * 100)}%` : "0%";
+  return (
+    <Panel title="Phase">
+      <div className="grid gap-3 lg:grid-cols-[1fr_2fr]">
+        <div className="space-y-2 text-sm text-zinc-700">
+          <p className="font-semibold text-zinc-950">{phase.flow_name}</p>
+          <p>{phase.pro_position}</p>
+          <p>{phase.con_position}</p>
+          <p>
+            Progress: {completed}/{phase.total || phase.sequence.length}
+          </p>
+          <div className="h-2 rounded bg-zinc-100">
+            <div className="h-2 rounded bg-emerald-700" style={{ width }} />
+          </div>
+          <p className="text-xs text-zinc-500">
+            Phase data comes from saved transcript metadata for the selected debate.
+          </p>
+        </div>
+        <div className="max-h-64 overflow-y-auto rounded-md border border-zinc-200">
+          {phase.sequence.map((item) => (
+            <div
+              key={item.key}
+              className={`flex gap-3 border-b border-zinc-100 px-3 py-2 text-sm last:border-b-0 ${
+                phase.current?.key === item.key ? "bg-emerald-50" : "bg-white"
+              }`}
+            >
+              <span className="w-8 shrink-0 font-semibold text-zinc-500">{item.index}</span>
+              <div className="min-w-0 flex-1">
+                <p className="font-medium text-zinc-950">{item.title}</p>
+                <p className="text-xs text-zinc-600">
+                  {item.speaker} · {item.kind.replace("_", " ")}
+                </p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+function WinRateChart({
+  data
+}: {
+  data: NonNullable<DebateAnalytics["session_charts"]>["win_rate_by_team"];
+}) {
+  if (data.resolved === 0) {
+    return (
+      <p className="text-sm text-zinc-600">
+        No resolved Pro/Con verdicts yet. Completed debates with clear Judge winners will appear here.
+      </p>
+    );
+  }
+  const resolved = data.resolved;
+  return (
+    <div>
+      <Bar label="Pro" value={data.pro / resolved} />
+      <Bar label="Con" value={data.con / resolved} />
+      <p className="mt-2 text-xs text-zinc-600">
+        {data.resolved} resolved winner(s) from {data.total_completed} completed debate(s).
+        {data.unclear > 0 ? ` ${data.unclear} verdict(s) were unclear.` : ""}
+      </p>
+    </div>
+  );
+}
+
+function ValueBarChart({
+  values,
+  unit,
+  formatter,
+  emptyText
+}: {
+  values: Record<string, number>;
+  unit: string;
+  formatter: (value: number) => string;
+  emptyText: string;
+}) {
+  const entries = Object.entries(values).filter(([, value]) => value > 0);
+  const max = Math.max(...entries.map(([, value]) => value), 0);
+  if (entries.length === 0 || max <= 0) {
+    return <p className="text-sm text-zinc-600">{emptyText}</p>;
+  }
+  return (
+    <div>
+      <p className="mb-2 text-xs font-medium text-zinc-500">Unit: {unit}</p>
+      {entries.map(([label, value]) => (
+        <ValueBar key={label} label={label} value={value} max={max} formatted={formatter(value)} />
+      ))}
+    </div>
+  );
+}
+
+function DurationChart({
+  rows
+}: {
+  rows: NonNullable<DebateAnalytics["session_charts"]>["debate_durations"];
+}) {
+  const completed = rows.filter((row) => row.duration_seconds > 0);
+  const max = Math.max(...completed.map((row) => row.duration_seconds), 0);
+  if (completed.length === 0 || max <= 0) {
+    return <p className="text-sm text-zinc-600">Completed debate duration will appear here.</p>;
+  }
+  return (
+    <div>
+      <p className="mb-2 text-xs font-medium text-zinc-500">Unit: seconds</p>
+      {completed.slice(-8).map((row) => (
+        <ValueBar
+          key={row.debate_id}
+          label={row.name}
+          value={row.duration_seconds}
+          max={max}
+          formatted={formatDuration(row.duration_seconds)}
+        />
+      ))}
+    </div>
+  );
+}
+
+function MessagesPieChart({ values }: { values: Record<string, number> }) {
+  const entries = Object.entries(values).filter(([, value]) => value > 0);
+  if (entries.length === 0) {
+    return <p className="text-sm text-zinc-600">No role messages recorded for this debate yet.</p>;
+  }
+  return <MultiPieChart entries={entries} unit="message(s)" />;
+}
+
+function CitationBox({
+  citations
+}: {
+  citations: NonNullable<DebateAnalytics["session_charts"]>["citations"];
+}) {
+  if (citations.length === 0) {
+    return (
+      <p className="text-sm text-zinc-600">
+        No live researcher citations have been recorded in this chat. Researchers are instructed to
+        cite real URLs only when web search/source access is actually available.
+      </p>
+    );
+  }
+  return (
+    <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+      {citations.map((citation, index) => (
+        <div key={`${citation.url}-${index}`} className="rounded-md border border-zinc-200 p-2 text-sm">
+          <p className="font-medium text-zinc-950">{citation.speaker}</p>
+          <p className="text-xs text-zinc-600">
+            {citation.debate_name} · {citation.phase_title}
+          </p>
+          <a
+            href={citation.url}
+            target="_blank"
+            rel="noreferrer"
+            className="mt-1 block break-all text-emerald-800 underline"
+          >
+            {citation.domain}
+          </a>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -850,7 +1118,7 @@ function SettingsPanel({
           )}
         </Panel>
 
-        <Panel title="Debaters & Teams">
+        <Panel title="Debating Flow">
           <div className="grid gap-3 md:grid-cols-2">
             <SelectSetting
               label="Debater amount per team"
@@ -858,6 +1126,34 @@ function SettingsPanel({
               options={["1", "2", "3", "4"]}
               onChange={(value) => onSettingsChange({ debaters_per_team: Number(value) })}
             />
+            <NumberSetting
+              label="Discussion Messages Per Team"
+              value={settings.discussion_messages_per_team}
+              min={1}
+              max={4}
+              onChange={(value) => onSettingsChange({ discussion_messages_per_team: value })}
+            />
+            <NumberSetting
+              label="Debate rounds"
+              value={settings.debate_rounds}
+              min={1}
+              max={6}
+              onChange={(value) => onSettingsChange({ debate_rounds: value })}
+            />
+          </div>
+          <div className="mt-3 rounded-md border border-zinc-200 bg-zinc-50 p-3 text-sm text-zinc-700">
+            <p className="font-semibold text-zinc-950">Flow preview</p>
+            <p className="mt-1">{flowPreview(settings.debaters_per_team)}</p>
+            <p className="mt-2 text-xs text-zinc-600">
+              Discussion Time uses Advocates only. They speak for the whole team and use previous
+              Researcher, Critic, and Examiner material when those roles are active. Debate rounds
+              controls how many advocate-led discussion phases are included.
+            </p>
+          </div>
+        </Panel>
+
+        <Panel title="Debaters & Teams">
+          <div className="grid gap-3 md:grid-cols-2">
             <ToggleSetting
               label="Judge Assistant, highly recommended"
               value={settings.judge_assistant_enabled}
@@ -999,6 +1295,13 @@ function SettingsPanel({
                   value={settings.show_model_costs}
                   onChange={(value) => onSettingsChange({ show_model_costs: value })}
                 />
+                <ToggleSetting
+                  label="Show Every Message Cost In Debate"
+                  value={settings.show_every_message_cost_in_debate}
+                  onChange={(value) =>
+                    onSettingsChange({ show_every_message_cost_in_debate: value })
+                  }
+                />
               </>
             ) : null}
           </div>
@@ -1012,13 +1315,6 @@ function SettingsPanel({
               min={0}
               max={6}
               onChange={(value) => onSettingsChange({ context_window: value })}
-            />
-            <NumberSetting
-              label="Debate rounds"
-              value={settings.debate_rounds}
-              min={1}
-              max={6}
-              onChange={(value) => onSettingsChange({ debate_rounds: value })}
             />
             <SelectSetting
               label="Export format"
@@ -1055,6 +1351,19 @@ function Panel({ title, children }: { title: string; children: ReactNode }) {
       {children}
     </section>
   );
+}
+
+function flowPreview(debatersPerTeam: number) {
+  if (debatersPerTeam <= 1) {
+    return "Constructives, cross-examination, answer + rebuttal turns, one Open Discussion with Pro-open and Con-open mini-rounds, closings, audit, verdict.";
+  }
+  if (debatersPerTeam === 2) {
+    return "Advocates build the cases, Critics cross-examine and rebut, Discussion Time 1 opens with Pro Advocate, Discussion Time 2 opens with Con Advocate, then closings, audit, verdict.";
+  }
+  if (debatersPerTeam === 3) {
+    return "Advocates frame the cases, Researchers add evidence, Critics rebut, two Advocate-led Discussion Time phases balance Pro and Con opening order, then closings, audit, verdict.";
+  }
+  return "Advocates open and close, Examiners pressure-test Advocates and Researchers, Researchers add evidence, Critics rebut, and two Advocate-led Discussion Time phases balance both teams.";
 }
 
 function DebateSettingsRow({
@@ -1250,6 +1559,31 @@ function Bar({ label, value }: { label: string; value: number }) {
   );
 }
 
+function ValueBar({
+  label,
+  value,
+  max,
+  formatted
+}: {
+  label: string;
+  value: number;
+  max: number;
+  formatted: string;
+}) {
+  const width = `${Math.max(3, Math.min(100, Math.round((value / Math.max(max, 1e-9)) * 100)))}%`;
+  return (
+    <div className="mb-2">
+      <div className="mb-1 flex justify-between gap-2 text-xs">
+        <span className="truncate text-zinc-700" title={label}>{label}</span>
+        <span className="shrink-0 font-medium text-zinc-900">{formatted}</span>
+      </div>
+      <div className="h-2 rounded bg-zinc-100">
+        <div className="h-2 rounded bg-emerald-700" style={{ width }} />
+      </div>
+    </div>
+  );
+}
+
 function PieChart({ values }: { values: Record<string, number> }) {
   const support = Math.round((values.support ?? 0) * 100);
   const oppose = Math.round((values.oppose ?? 0) * 100);
@@ -1264,6 +1598,32 @@ function PieChart({ values }: { values: Record<string, number> }) {
         <Legend color="bg-emerald-700" label="Support" value={support} />
         <Legend color="bg-red-600" label="Oppose" value={oppose} />
         <Legend color="bg-cyan-700" label="Mixed" value={mixed} />
+      </div>
+    </div>
+  );
+}
+
+function MultiPieChart({ entries, unit }: { entries: Array<[string, number]>; unit: string }) {
+  const colors = ["#047857", "#dc2626", "#0891b2", "#d97706", "#52525b"];
+  const total = entries.reduce((sum, [, value]) => sum + value, 0) || 1;
+  let cursor = 0;
+  const stops = entries.map(([, value], index) => {
+    const start = cursor;
+    cursor += (value / total) * 100;
+    return `${colors[index % colors.length]} ${start}% ${cursor}%`;
+  });
+  return (
+    <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+      <div className="h-36 w-36 shrink-0 rounded-full border border-zinc-300" style={{ background: `conic-gradient(${stops.join(", ")})` }} />
+      <div className="space-y-2 text-sm">
+        {entries.map(([label, value], index) => (
+          <div key={label} className="flex items-center gap-2">
+            <span className="h-3 w-3 rounded" style={{ backgroundColor: colors[index % colors.length] }} />
+            <span className="text-zinc-700">
+              {label}: {value} {unit}
+            </span>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -1302,15 +1662,38 @@ function LineChart({ history }: { history: DebateAnalytics[] }) {
         <line x1={pad} y1={height - pad} x2={width - pad} y2={height - pad} stroke="#d4d4d8" />
         <line x1={pad} y1={pad} x2={pad} y2={height - pad} stroke="#d4d4d8" />
         {[0.25, 0.5, 0.75].map((tick) => (
-          <line
-            key={tick}
-            x1={pad}
-            y1={height - pad - tick * (height - pad * 2)}
-            x2={width - pad}
-            y2={height - pad - tick * (height - pad * 2)}
-            stroke="#f4f4f5"
-          />
+          <g key={tick}>
+            <line
+              x1={pad}
+              y1={height - pad - tick * (height - pad * 2)}
+              x2={width - pad}
+              y2={height - pad - tick * (height - pad * 2)}
+              stroke="#f4f4f5"
+            />
+            <text
+              x={pad - 8}
+              y={height - pad - tick * (height - pad * 2) + 4}
+              textAnchor="end"
+              fontSize="10"
+              fill="#71717a"
+            >
+              {Math.round(tick * 100)}%
+            </text>
+          </g>
         ))}
+        <text x={width / 2} y={height - 4} textAnchor="middle" fontSize="11" fill="#52525b">
+          X-axis unit: analytics update number
+        </text>
+        <text
+          x={12}
+          y={height / 2}
+          textAnchor="middle"
+          fontSize="11"
+          fill="#52525b"
+          transform={`rotate(-90 12 ${height / 2})`}
+        >
+          Y-axis unit: probability (%)
+        </text>
         {labels.map((label) => (
           <path key={label} d={pathFor(label)} fill="none" stroke={colors[label]} strokeWidth={3} />
         ))}
@@ -1524,6 +1907,13 @@ function formatCost(value: number, currency: string) {
   const normalized = currency in symbols ? currency : "USD";
   const decimals = normalized === "JPY" ? 4 : 6;
   return `${symbols[normalized]}${Number(value || 0).toFixed(decimals)} ${normalized}`;
+}
+
+function formatDuration(seconds: number) {
+  if (seconds >= 60) {
+    return `${(seconds / 60).toFixed(1)} min`;
+  }
+  return `${seconds.toFixed(1)} sec`;
 }
 
 function maxVote(analytics: DebateAnalytics) {

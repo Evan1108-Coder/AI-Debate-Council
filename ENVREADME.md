@@ -43,8 +43,8 @@ The frontend calls `GET /api/models` and uses the returned `models` array for al
 | `FRONTEND_ORIGIN` | No | `http://localhost:6001` | Convenience origin for CORS when `CORS_ORIGINS` is not set. |
 | `CORS_ORIGINS` | No | `http://localhost:6001` | Comma-separated list of frontend origins allowed to call the backend. The backend automatically adds both `localhost` and `127.0.0.1` variants. |
 | `ALLOW_LOCALHOST_PORTS` | No | `false` | Set to `true` only for local development when you want to allow browser requests from any localhost or 127.0.0.1 port. Keep it `false` for sharing or production-like testing. |
-| `DEBATE_ROUNDS` | No | `2` | Default number of debate rounds before the judge summary. Each round consists of one turn per active debater. With 3 debaters per team (6 total agents), 2 rounds means 12 debater turns. Users can override this per chat in Chat Settings (1–6). |
-| `LITELLM_TIMEOUT_SECONDS` | No | `120` | Timeout in seconds for each model call through LiteLLM. Applies to both streamed debate turns and non-streamed moderator/classifier calls (capped at 30 seconds for those). |
+| `DEBATE_ROUNDS` | No | `2` | Default number of advocate-led discussion phases for new chats. Users can override this per chat in Chat Settings (1–6). |
+| `LITELLM_TIMEOUT_SECONDS` | No | `120` | Timeout in seconds for each model call through LiteLLM. Applies to streamed debate turns and non-streamed safety/intent classifier calls (capped at 30 seconds for those). |
 | `MOCK_LLM_RESPONSES` | No | `false` | Set to `true` to stream local fake responses without any API keys. Useful for UI development and testing. When enabled and no real provider keys are set, a `mock-debate-model` appears in the dropdown. |
 
 ### Notes on CORS

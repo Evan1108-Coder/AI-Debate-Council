@@ -27,8 +27,8 @@ The backend is Python 3.13, FastAPI, SQLite, WebSockets, and LiteLLM. The fronte
 ### Debate System
 
 - **Pro and Con teams** with 1 to 4 debaters per team, configurable per chat.
-- **Four team roles**: Lead Advocate, Rebuttal Critic, Evidence Researcher, and Cross-Examiner. Each role has a distinct system prompt, job description, and default behavior.
-- **Bid-based turn selection**: A moderator LLM (or local heuristic fallback) chooses who speaks next based on urgency, intent, and what was just said — not a fixed rotation.
+- **Four team roles**: Advocate, Rebuttal Critic, Evidence Researcher, and Cross-Examiner. Each role has a distinct system prompt, job description, and default behavior.
+- **Professional phase flow**: Debates follow structured constructive, cross-examination, evidence, rebuttal, advocate-led discussion, closing, audit, and verdict phases instead of the old moderator loop.
 - **Optional Judge Assistant**: Before the final verdict, a neutral Judge Assistant audits the debate for missed points, unanswered claims, evidence gaps, contradictions, and useful statistics for the Judge.
 - **Judge AI verdict**: The Judge receives the full transcript, the Judge Assistant audit, and live analytics, then delivers a structured six-part verdict naming a winner.
 - **Maximum 3 active debates** running concurrently across all sessions.
@@ -43,7 +43,7 @@ The backend is Python 3.13, FastAPI, SQLite, WebSockets, and LiteLLM. The fronte
 
 - **21 models across 6 providers**: OpenAI, Anthropic, Google, Groq (Llama), MiniMax, and Moonshot.
 - **Automatic model detection**: Add a provider API key to `.env` and all models from that provider appear in the dropdown. No model names go in `.env`.
-- **Per-agent model overrides**: Each role (Lead Advocate, Rebuttal Critic, etc.) can use a different model, or fall back to the session's Overall Model.
+- **Per-agent model overrides**: Each role (Advocate, Rebuttal Critic, etc.) can use a different model, or fall back to the session's Overall Model.
 - **Mock mode**: Set `MOCK_LLM_RESPONSES=true` to test the full UI flow without real API calls.
 
 ### Analytics and Intelligence
@@ -57,8 +57,8 @@ The backend is Python 3.13, FastAPI, SQLite, WebSockets, and LiteLLM. The fronte
 
 - **Estimated API cost per debate**: The backend tracks token usage for every model call and estimates costs using built-in price tables for 20+ models.
 - **9 currencies**: USD, CNY, HKD, EUR, JPY, GBP, AUD, CAD, SGP. Currency is selectable per chat in Chat Settings.
-- **Per-message cost summary**: Each message stores a `cost_summary` with total cost, token counts, and per-model breakdowns.
-- **CostBox display**: When "Show Money Cost" is enabled in Chat Settings, a cost badge appears below each message showing the estimated cost in the selected currency. An optional per-model breakdown is available via "Show Model Costs".
+- **Cost summaries**: Council Assistant messages show their own estimated cost. Debate turns store individual costs for analytics, while the final Judge message also stores the overall debate total.
+- **CostBox display**: When "Show Money Cost" is enabled in Chat Settings, debate mode shows the overall debate cost after the Judge by default. Turn-by-turn debate costs appear only when "Show Every Message Cost In Debate" is enabled. An optional per-model breakdown is available via "Show Model Costs".
 - **Token estimation**: A lightweight heuristic estimates tokens from text (with CJK-aware counting) without requiring a tokenizer library.
 
 ### Runtime Diary
@@ -86,14 +86,15 @@ The backend is Python 3.13, FastAPI, SQLite, WebSockets, and LiteLLM. The fronte
 ### Per-Chat Settings
 
 - Overall Model selection (applies to all roles by default).
-- Debaters per team (1–4).
+- Debaters per team (1–4, default 2).
+- Discussion Messages Per Team (1–4, default 3).
+- Debate rounds (1–6, default 2) controls the number of advocate-led discussion phases.
 - Judge Assistant toggle (on/off, recommended on).
 - Per-agent settings: model, temperature (0–1), max tokens (120–2000), response length (Concise/Normal/Detailed), web search toggle for Evidence Researcher, Always On toggle for Council Assistant.
 - Debate tone (Academic, Casual, Formal, Aggressive).
 - Language (English, Chinese, Cantonese).
 - Context window (0–6 rounds of debate history included in prompts).
-- Debate rounds (1–6).
-- Auto-scroll, show timestamps, show token count.
+- Auto-scroll, show timestamps, show token count, show money cost, show every message cost in debate.
 - Fact-check mode (reserved for future tool integration).
 - Export format (Markdown, PDF, JSON — reserved).
 - Auto-save interval (5–300 seconds).
@@ -198,16 +199,16 @@ Each debate has two teams (Pro and Con) with 1 to 4 debaters per team. The numbe
 
 | Debaters Per Team | Active Roles |
 | --- | --- |
-| 1 | Lead Advocate |
-| 2 | Lead Advocate, Rebuttal Critic |
-| 3 | Lead Advocate, Rebuttal Critic, Evidence Researcher |
-| 4 | Lead Advocate, Rebuttal Critic, Evidence Researcher, Cross-Examiner |
+| 1 | Advocate |
+| 2 | Advocate, Rebuttal Critic |
+| 3 | Advocate, Rebuttal Critic, Evidence Researcher |
+| 4 | Advocate, Rebuttal Critic, Evidence Researcher, Cross-Examiner |
 
 ### Role Descriptions
 
 | Role | Job |
 | --- | --- |
-| **Lead Advocate** | Build the team's central case, keep the argument coherent, and defend the main thesis. |
+| **Advocate** | Build the team's central case, keep the argument coherent, and defend the main thesis. |
 | **Rebuttal Critic** | Attack the opposing team's strongest point and protect your team from direct criticism. |
 | **Evidence Researcher** | Add evidence, examples, missing context, and careful uncertainty notes for your team. |
 | **Cross-Examiner** | Ask pressure questions, expose contradictions, and force the other team to answer clearly. |
@@ -217,24 +218,19 @@ Each debate has two teams (Pro and Con) with 1 to 4 debaters per team. The numbe
 ### Debate Flow
 
 1. **User sends a message.** The intent classifier determines whether to start a debate or a chat.
-2. **Pro Lead Advocate opens** the affirmative case.
-3. **Con Lead Advocate responds** with the opposing case.
-4. **Moderator selects turns.** For each subsequent turn, a moderator LLM (or local heuristic fallback) picks the best speaker based on urgency, intent, and the state of the debate. This is not a fixed rotation — agents "bid" for the floor.
-5. **Turns continue** until the configured number of rounds completes (rounds × active debaters = total turns).
+2. **Constructive phase.** Pro and Con Advocates build their opening cases.
+3. **Cross-examination and evidence phases.** Critics or Examiners ask pointed questions, and Researchers add evidence when those roles are active.
+4. **Discussion Time.** Advocates speak as team spokespersons. Discussion Time 1 opens with Pro Advocate; Discussion Time 2 opens with Con Advocate. One-debater mode uses one Open Discussion block with Pro-open and Con-open mini-rounds.
+5. **Rebuttal and closing phases.** Critics attack the strongest opposing points, then Advocates close.
 6. **Judge Assistant audits** (if enabled) the full transcript and analytics.
 7. **Judge delivers verdict** with six parts: best affirmative argument, best skeptical argument, best evidence or research need, analytics agreement/disagreement, clear winner, and why.
 
-### Turn Selection
+### Discussion Rules
 
-The bid-based system scores each agent on:
-
-- Whether they have spoken yet (new voices get a bonus).
-- Whether the opposing team just made a point (cross-team response urgency).
-- Whether there is a direct question to answer.
-- Archetype-specific bonuses (Rebuttal Critic gets urgency against opposing claims, Cross-Examiner gets urgency when few recent questions exist, etc.).
-- Penalties for speaking too recently or for same-team monopoly.
-
-If the moderator LLM is available, it overrides the local heuristic and can also signal "END" to stop the debate early if further turns would be repetitive.
+- Discussion Messages Per Team caps each team at 1–4 Advocate messages per discussion phase.
+- Advocates may use teammate material from Researchers, Critics, and Examiners, but only Advocates speak during discussion.
+- Agents address specific argument content directly. They avoid narration like “my opponent says” and avoid referring to turn numbers as arguments.
+- Cross-examination turns ask 2–4 questions after a short setup sentence; they do not answer their own questions or become full rebuttals.
 
 ### Streaming
 
@@ -287,7 +283,9 @@ Each session stores its own settings. Changes take effect on the next turn — e
 | Setting | Default | Range | Description |
 | --- | --- | --- | --- |
 | Overall Model | (none) | Any unlocked model | Default model for all roles in this chat. |
-| Debaters per team | 3 | 1–4 | Number of debater roles active per team. |
+| Debaters per team | 2 | 1–4 | Number of debater roles active per team. |
+| Discussion Messages Per Team | 3 | 1–4 | Advocate messages allowed for each team in each discussion phase. |
+| Debate rounds | 2 | 1–6 | Number of advocate-led discussion phases in the professional flow. |
 | Judge Assistant | On | On/Off | Whether the Judge Assistant audits before the verdict. |
 | Temperature | 0.55 | 0.00–1.00 | Default temperature for all roles. |
 | Max tokens | 700 | 120–2000 | Default max tokens for all roles. |
@@ -295,20 +293,20 @@ Each session stores its own settings. Changes take effect on the next turn — e
 | Language | English | English, Chinese, Cantonese | Injected into all system prompts. |
 | Response length | Normal | Concise, Normal, Detailed | Controls word limits in debater prompts. |
 | Context window | 2 | 0–6 | How many rounds of recent debate history are included in debater prompts. |
-| Debate rounds | 2 | 1–6 | Number of full rounds before judging. |
 | Auto-scroll | On | On/Off | Auto-scroll to latest message. |
 | Show timestamps | Off | On/Off | Show message timestamps. |
 | Show token count | Off | On/Off | Show estimated token counts. |
-| Show money cost | Off | On/Off | Display estimated API cost below each message. |
+| Show money cost | On | On/Off | Display estimated API cost. Council Assistant messages show their own cost; debate messages show the final total by default. |
 | Cost currency | USD | USD, CNY, HKD, EUR, JPY, GBP, AUD, CAD, SGP | Currency for cost display. |
 | Show model costs | Off | On/Off | Show per-model cost breakdown in addition to the total. |
+| Show Every Message Cost In Debate | Off | On/Off | Show individual debater, Judge Assistant, and Judge message costs during debates, plus the final overall debate cost. |
 | Fact-check mode | Off | On/Off | Flag uncertain claims (reserved for tool integration). |
 | Export format | Markdown | Markdown, PDF, JSON | Reserved for future export feature. |
 | Auto-save interval | 30 | 5–300 seconds | Reserved for future auto-save feature. |
 
 ### Per-Agent Settings
 
-Each of the 7 agent roles (Lead Advocate, Rebuttal Critic, Evidence Researcher, Cross-Examiner, Judge Assistant, Judge, Council Assistant) can override:
+Each of the 7 agent roles (Advocate, Rebuttal Critic, Evidence Researcher, Cross-Examiner, Judge Assistant, Judge, Council Assistant) can override:
 
 | Setting | Default | Description |
 | --- | --- | --- |
@@ -319,7 +317,7 @@ Each of the 7 agent roles (Lead Advocate, Rebuttal Critic, Evidence Researcher, 
 | Web search | Off | Evidence Researcher only: flag for web search integration. |
 | Always On | Off | Council Assistant only: bypass intent classifier, always use chat mode. |
 
-Team role settings (Lead Advocate, Rebuttal Critic, etc.) apply to both the Pro and Con versions of that role.
+Team role settings (Advocate, Rebuttal Critic, etc.) apply to both the Pro and Con versions of that role.
 
 ## Session and Debate Management
 

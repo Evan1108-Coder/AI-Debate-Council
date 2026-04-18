@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from datetime import datetime, timezone
 from math import exp, log
 import re
 from typing import Any
+from urllib.parse import urlparse
 
 
 STANCE_LABELS = ("support", "oppose", "mixed")
@@ -243,6 +245,196 @@ def format_analytics_report(analysis: dict[str, Any]) -> str:
             *[f"- {claim['speaker']}: {claim['text']}" for claim in claims[:3]],
         ]
     )
+
+
+def session_chart_data(
+    debates: list[dict[str, Any]],
+    messages: list[dict[str, Any]],
+    selected_debate_id: str | None,
+) -> dict[str, Any]:
+    selected_messages = [
+        message for message in messages if message.get("debate_id") == selected_debate_id
+    ]
+    debate_name_by_id = {debate.get("id"): debate.get("name") or "Debate" for debate in debates}
+
+    return {
+        "win_rate_by_team": _win_rate_by_team(debates),
+        "cost_by_phase": _cost_by_phase(selected_messages),
+        "debate_durations": _debate_durations(debates),
+        "messages_by_role": _messages_by_role(selected_messages),
+        "citations": _citations_from_researchers(messages, debate_name_by_id),
+    }
+
+
+def _win_rate_by_team(debates: list[dict[str, Any]]) -> dict[str, Any]:
+    counts = {"pro": 0, "con": 0, "unclear": 0}
+    for debate in debates:
+        if str(debate.get("status") or "") != "completed":
+            continue
+        winner = _infer_debate_winner(str(debate.get("judge_summary") or ""))
+        counts[winner] += 1
+    resolved = counts["pro"] + counts["con"]
+    return {
+        **counts,
+        "resolved": resolved,
+        "total_completed": resolved + counts["unclear"],
+        "pro_rate": round(counts["pro"] / resolved, 3) if resolved else 0.0,
+        "con_rate": round(counts["con"] / resolved, 3) if resolved else 0.0,
+    }
+
+
+def _infer_debate_winner(summary: str) -> str:
+    text = summary.lower()
+    winner_slice = text
+    winner_match = re.search(r"(clear\s+winner|winner|verdict|wins?)[:\s-]+(.{0,180})", text)
+    if winner_match:
+        winner_slice = winner_match.group(2)
+    pro_markers = (
+        "pro",
+        "affirmative",
+        "support",
+        "supporting side",
+        "in favor",
+    )
+    con_markers = (
+        "con",
+        "negative",
+        "oppose",
+        "opposing side",
+        "against",
+        "skeptical",
+    )
+    pro_hit = any(re.search(rf"\b{re.escape(marker)}\b", winner_slice) for marker in pro_markers)
+    con_hit = any(re.search(rf"\b{re.escape(marker)}\b", winner_slice) for marker in con_markers)
+    if pro_hit and not con_hit:
+        return "pro"
+    if con_hit and not pro_hit:
+        return "con"
+    return "unclear"
+
+
+def _cost_by_phase(messages: list[dict[str, Any]]) -> dict[str, float]:
+    costs = {
+        "Constructive": 0.0,
+        "Cross-exam": 0.0,
+        "Evidence": 0.0,
+        "Rebuttal": 0.0,
+        "Discussion": 0.0,
+        "Closing": 0.0,
+        "Judgment": 0.0,
+    }
+    for message in messages:
+        summary = message.get("cost_summary") or {}
+        cost = float(summary.get("total_usd") or 0.0) if isinstance(summary, dict) else 0.0
+        if cost <= 0:
+            continue
+        label = _phase_cost_label(message)
+        costs[label] = costs.get(label, 0.0) + cost
+    return {label: round(value, 8) for label, value in costs.items() if value > 0}
+
+
+def _phase_cost_label(message: dict[str, Any]) -> str:
+    role = str(message.get("role") or "")
+    kind = str(message.get("phase_kind") or "")
+    if role in {"judge", "judge_assistant"}:
+        return "Judgment"
+    if kind == "constructive":
+        return "Constructive"
+    if kind == "cross_exam":
+        return "Cross-exam"
+    if kind == "evidence":
+        return "Evidence"
+    if kind in {"rebuttal", "answer_rebuttal"}:
+        return "Rebuttal"
+    if kind == "discussion":
+        return "Discussion"
+    if kind == "closing":
+        return "Closing"
+    return "Judgment" if role in {"judge", "judge_assistant"} else "Constructive"
+
+
+def _debate_durations(debates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows = []
+    for debate in sorted(debates, key=lambda item: int(item.get("default_index") or 0)):
+        started = _parse_datetime(str(debate.get("started_at") or ""))
+        finished = _parse_datetime(str(debate.get("finished_at") or ""))
+        duration = 0.0
+        if started and finished:
+            duration = max(0.0, (finished - started).total_seconds())
+        rows.append(
+            {
+                "debate_id": debate.get("id") or "",
+                "name": debate.get("name") or "Debate",
+                "status": debate.get("status") or "unknown",
+                "duration_seconds": round(duration, 1),
+            }
+        )
+    return rows
+
+
+def _parse_datetime(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed
+
+
+def _messages_by_role(messages: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {"Advocate": 0, "Critic": 0, "Researcher": 0, "Examiner": 0, "Judge": 0}
+    for message in messages:
+        label = _speaker_group(str(message.get("role") or ""))
+        if label:
+            counts[label] += 1
+    return {label: count for label, count in counts.items() if count > 0}
+
+
+def _speaker_group(role: str) -> str | None:
+    if role in {"judge", "judge_assistant"}:
+        return "Judge"
+    if role.endswith("lead_advocate"):
+        return "Advocate"
+    if role.endswith("rebuttal_critic"):
+        return "Critic"
+    if role.endswith("evidence_researcher"):
+        return "Researcher"
+    if role.endswith("cross_examiner"):
+        return "Examiner"
+    return None
+
+
+def _citations_from_researchers(
+    messages: list[dict[str, Any]], debate_name_by_id: dict[str, str]
+) -> list[dict[str, str]]:
+    citations = []
+    seen: set[tuple[str, str]] = set()
+    for message in messages:
+        role = str(message.get("role") or "")
+        if not role.endswith("evidence_researcher"):
+            continue
+        content = str(message.get("content") or "")
+        for url in re.findall(r"https?://[^\s)\]>\"']+", content):
+            cleaned_url = url.rstrip(".,;:")
+            key = (str(message.get("id") or ""), cleaned_url)
+            if key in seen:
+                continue
+            seen.add(key)
+            parsed = urlparse(cleaned_url)
+            citations.append(
+                {
+                    "speaker": str(message.get("speaker") or "Researcher"),
+                    "url": cleaned_url,
+                    "domain": parsed.netloc or cleaned_url,
+                    "debate_id": str(message.get("debate_id") or ""),
+                    "debate_name": debate_name_by_id.get(message.get("debate_id"), "Debate"),
+                    "phase_title": str(message.get("phase_title") or "Evidence"),
+                }
+            )
+    return citations[:40]
 
 
 def _empty_analysis() -> dict[str, Any]:
@@ -614,7 +806,7 @@ def _role_label(role: str) -> str:
         "critic": "Critic",
         "researcher": "Researcher",
         "devils_advocate": "Devil's Advocate",
-        "lead_advocate": "Lead Advocate",
+        "lead_advocate": "Advocate",
         "rebuttal_critic": "Rebuttal Critic",
         "evidence_researcher": "Evidence Researcher",
         "cross_examiner": "Cross-Examiner",

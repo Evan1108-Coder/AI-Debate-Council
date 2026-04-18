@@ -31,7 +31,8 @@ class SessionSettingsTests(unittest.TestCase):
         other = self.db.get_session_settings(second["id"])
 
         self.assertEqual(updated["overall_model"], "gpt-4o")
-        self.assertEqual(updated["debaters_per_team"], 3)
+        self.assertEqual(updated["debaters_per_team"], 2)
+        self.assertEqual(updated["discussion_messages_per_team"], 3)
         self.assertTrue(updated["judge_assistant_enabled"])
         self.assertIn("council_assistant", updated["agent_settings"])
         self.assertIn("lead_advocate", updated["agent_settings"])
@@ -53,6 +54,7 @@ class SessionSettingsTests(unittest.TestCase):
                 "debate_rounds": 99,
                 "context_window": -1,
                 "debaters_per_team": 99,
+                "discussion_messages_per_team": 99,
                 "agent_settings": {
                     "council_assistant": {"always_on": True},
                     "lead_advocate": {
@@ -69,6 +71,7 @@ class SessionSettingsTests(unittest.TestCase):
         self.assertEqual(updated["debate_rounds"], 6)
         self.assertEqual(updated["context_window"], 0)
         self.assertEqual(updated["debaters_per_team"], 4)
+        self.assertEqual(updated["discussion_messages_per_team"], 4)
         self.assertTrue(updated["agent_settings"]["council_assistant"]["always_on"])
         self.assertEqual(updated["agent_settings"]["lead_advocate"]["temperature"], 0.0)
         self.assertEqual(updated["agent_settings"]["lead_advocate"]["max_tokens"], 2000)
@@ -105,6 +108,7 @@ class SessionSettingsTests(unittest.TestCase):
                 "show_money_cost": False,
                 "cost_currency": "CNY",
                 "show_model_costs": True,
+                "show_every_message_cost_in_debate": True,
             },
         )
         other = self.db.get_session_settings(second["id"])
@@ -112,9 +116,11 @@ class SessionSettingsTests(unittest.TestCase):
         self.assertFalse(updated["show_money_cost"])
         self.assertEqual(updated["cost_currency"], "CNY")
         self.assertTrue(updated["show_model_costs"])
+        self.assertTrue(updated["show_every_message_cost_in_debate"])
         self.assertTrue(other["show_money_cost"])
         self.assertEqual(other["cost_currency"], "USD")
         self.assertFalse(other["show_model_costs"])
+        self.assertFalse(other["show_every_message_cost_in_debate"])
 
     def test_message_cost_summary_round_trips(self) -> None:
         session = self.db.create_session(max_sessions=10)
@@ -129,11 +135,14 @@ class SessionSettingsTests(unittest.TestCase):
             model="gpt-4o-mini",
             content="Done.",
             cost_summary=summary,
+            debate_cost_summary={"currency": "USD", "total": 0.01, "models": []},
         )
         listed = self.db.list_messages(session["id"])
 
         self.assertEqual(saved["cost_summary"], summary)
+        self.assertEqual(saved["debate_cost_summary"]["total"], 0.01)
         self.assertEqual(listed[0]["cost_summary"], summary)
+        self.assertEqual(listed[0]["debate_cost_summary"]["total"], 0.01)
 
     def test_existing_settings_table_is_migrated_for_overall_model(self) -> None:
         legacy_path = Path(self.temp_dir.name) / "legacy.db"
@@ -180,8 +189,10 @@ class SessionSettingsTests(unittest.TestCase):
         settings = migrated.get_session_settings(session["id"])
 
         self.assertEqual(settings["overall_model"], "")
-        self.assertEqual(settings["debaters_per_team"], 3)
+        self.assertEqual(settings["debaters_per_team"], 2)
+        self.assertEqual(settings["discussion_messages_per_team"], 3)
         self.assertTrue(settings["judge_assistant_enabled"])
+        self.assertFalse(settings["show_every_message_cost_in_debate"])
         self.assertIn("council_assistant", settings["agent_settings"])
         self.assertIn("judge", settings["agent_settings"])
 

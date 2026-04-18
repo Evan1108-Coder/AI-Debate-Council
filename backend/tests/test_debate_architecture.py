@@ -40,48 +40,24 @@ class DebateArchitectureTests(unittest.TestCase):
         assignments = self.manager._assignment_payload(settings, MOCK_MODEL)
 
         self.assertEqual([assignment["speaker"] for assignment in assignments], [
-            "Pro Lead Advocate",
-            "Con Lead Advocate",
+            "Pro Advocate",
+            "Con Advocate",
             "Judge",
         ])
 
-    def test_turn_bid_opens_pro_then_con(self) -> None:
+    def test_professional_flow_uses_advocate_led_discussions(self) -> None:
         session = self.db.create_session(max_sessions=10)
         settings = self.db.get_session_settings(session["id"])
-        agents = self.manager._active_debate_agents(settings)
+        flow = self.manager._debate_flow(settings)
 
-        first = asyncio.run(
-            self.manager._select_turn_bid(
-                topic="Should cities ban private cars downtown?",
-                agents=agents,
-                transcript=[],
-                turn_index=0,
-                max_turns=6,
-                model=MOCK_MODEL,
-                session_settings=settings,
-            )
-        )
-        second = asyncio.run(
-            self.manager._select_turn_bid(
-                topic="Should cities ban private cars downtown?",
-                agents=agents,
-                transcript=[
-                    {
-                        "role": first["agent"]["role"],
-                        "speaker": first["agent"]["speaker"],
-                        "team": first["agent"]["team"],
-                        "content": "The Pro side opens.",
-                    }
-                ],
-                turn_index=1,
-                max_turns=6,
-                model=MOCK_MODEL,
-                session_settings=settings,
-            )
-        )
-
-        self.assertEqual(first["agent"]["role"], "pro_lead_advocate")
-        self.assertEqual(second["agent"]["role"], "con_lead_advocate")
+        self.assertEqual(flow[0]["agent"]["role"], "pro_lead_advocate")
+        self.assertEqual(flow[1]["agent"]["role"], "con_rebuttal_critic")
+        self.assertEqual(flow[2]["agent"]["role"], "con_lead_advocate")
+        discussion_roles = [phase["agent"]["role"] for phase in flow if phase["kind"] == "discussion"]
+        self.assertTrue(discussion_roles)
+        self.assertTrue(all(role in {"pro_lead_advocate", "con_lead_advocate"} for role in discussion_roles))
+        self.assertEqual(discussion_roles[0], "pro_lead_advocate")
+        self.assertIn("con_lead_advocate", discussion_roles)
 
     def test_intent_router_respects_explicit_debate_and_plain_chat(self) -> None:
         self.assertEqual(
@@ -185,7 +161,8 @@ class DebateArchitectureTests(unittest.TestCase):
         )
         transcript = [
             {
-                "speaker": "Pro Lead Advocate",
+                "speaker": "Pro Advocate",
+                "phase_title": "Pro Advocate Constructive Speech",
                 "role": "pro_lead_advocate",
                 "team": "pro",
                 "round": 1,
@@ -193,26 +170,21 @@ class DebateArchitectureTests(unittest.TestCase):
                 "content": "Polite prompts improve cooperation.",
             }
         ]
-        bid = self.manager._bid(
-            agent,
-            0.8,
-            "rebut the latest claim",
-            "Polite prompts improve cooperation.",
-            "the prior claim needs direct rebuttal",
+        phase = next(
+            item for item in self.manager._debate_flow(settings) if item["key"] == "con_critic_rebuttal"
         )
 
         messages = self.manager._agent_messages(
             "Should users be polite to AI?",
             agent,
-            1,
+            phase,
             transcript,
             settings,
             self.manager._agent_generation_settings(settings, agent["archetype"]),
-            bid,
         )
         prompt_text = "\n".join(message["content"] for message in messages)
 
-        self.assertIn("Pro Lead Advocate, you said", prompt_text)
+        self.assertIn("Pro Advocate, you said", prompt_text)
         self.assertIn('do not say "my opponent"', prompt_text.lower())
 
     def test_context_slice_caps_turn_count_and_content_size(self) -> None:

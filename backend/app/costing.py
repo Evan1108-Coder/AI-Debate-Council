@@ -91,6 +91,12 @@ class CostTracker:
         )
 
     def summary(self, currency: str) -> dict[str, Any]:
+        return self._summary_for_entries(self.entries, currency)
+
+    def summary_since(self, start_index: int, currency: str) -> dict[str, Any]:
+        return self._summary_for_entries(self.entries[max(0, start_index) :], currency)
+
+    def _summary_for_entries(self, entries: list[CostEntry], currency: str) -> dict[str, Any]:
         normalized_currency = normalize_currency(currency)
         rate = EXCHANGE_RATES_PER_USD[normalized_currency]
         grouped: dict[str, dict[str, Any]] = defaultdict(
@@ -104,7 +110,7 @@ class CostTracker:
                 "output_usd_per_1m": 0.0,
             }
         )
-        for entry in self.entries:
+        for entry in entries:
             item = grouped[entry.model]
             item["model"] = entry.model
             item["input_tokens"] += entry.input_tokens
@@ -125,14 +131,14 @@ class CostTracker:
                 }
             )
         model_items.sort(key=lambda item: item["cost_usd"], reverse=True)
-        total_usd = sum(entry.cost_usd for entry in self.entries)
+        total_usd = sum(entry.cost_usd for entry in entries)
         return {
             "currency": normalized_currency,
             "total": round(total_usd * rate, 8),
             "total_usd": round(total_usd, 8),
-            "input_tokens": sum(entry.input_tokens for entry in self.entries),
-            "output_tokens": sum(entry.output_tokens for entry in self.entries),
-            "calls": len(self.entries),
+            "input_tokens": sum(entry.input_tokens for entry in entries),
+            "output_tokens": sum(entry.output_tokens for entry in entries),
+            "calls": len(entries),
             "models": model_items,
             "estimated": True,
             "rate_source": "local fallback exchange rates",

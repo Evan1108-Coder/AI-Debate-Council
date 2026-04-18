@@ -9,7 +9,7 @@ from uuid import uuid4
 
 from fastapi import WebSocket, WebSocketDisconnect
 
-from .analytics import analyze_debate, format_analytics_report
+from .analytics import analyze_debate, format_analytics_report, session_chart_data
 from .config import settings
 from .costing import CostTracker, message_input_text
 from .database import Database, utc_now
@@ -26,7 +26,7 @@ except ImportError:  # pragma: no cover - handled at runtime for clearer setup e
 TEAM_ROLE_DEFINITIONS = (
     {
         "archetype": "lead_advocate",
-        "label": "Lead Advocate",
+        "label": "Advocate",
         "min_debaters": 1,
         "job": "Build the team's central case, keep the argument coherent, and defend the main thesis.",
         "default_intent": "build the main case",
@@ -53,6 +53,7 @@ TEAM_ROLE_DEFINITIONS = (
         "default_intent": "cross-examine",
     },
 )
+USER_MESSAGE_MAX_CHARS = 5500
 TEAM_DEFINITIONS = (
     {
         "team": "pro",
@@ -120,6 +121,10 @@ class DebateManager:
     async def run_interaction(
         self, websocket: WebSocket, session_id: str, content: str, selected_model_name: str
     ) -> None:
+        if len(content) > USER_MESSAGE_MAX_CHARS:
+            raise DebateError(
+                f"Please shorten your message to {USER_MESSAGE_MAX_CHARS} characters or less."
+            )
         cleaned_content = " ".join(content.strip().split())
         if not cleaned_content:
             raise DebateError("Please enter a message.")
@@ -200,8 +205,6 @@ class DebateManager:
             opening_settings.get("overall_model", "")
         ).strip()
         selected_model = self._resolve_selected_model(effective_model_name)
-        debate_rounds = opening_settings["debate_rounds"]
-
         async with self._lock:
             if len(self._active_debates) >= settings.max_active_debates:
                 raise DebateError(
@@ -235,6 +238,7 @@ class DebateManager:
                 "type": "debate_started",
                 "debate": debate,
                 "topic": cleaned_topic,
+                "positions": self.debate_positions(cleaned_topic),
                 "selected_model": selected_model.public_dict(configured=True),
                 "assignments": self._assignment_payload(opening_settings, selected_model),
                 "judge": {
@@ -246,69 +250,66 @@ class DebateManager:
             }
         )
 
+        flow = self._debate_flow(opening_settings)
         transcript: list[dict[str, Any]] = []
-        latest_analysis = analyze_debate(cleaned_topic, transcript)
+        latest_analysis = self._with_phase_metadata(
+            analyze_debate(cleaned_topic, transcript),
+            flow=flow,
+            current_phase=None,
+            topic=cleaned_topic,
+        )
         try:
-            max_possible_turns = 8 * 6
-            for turn_index in range(max_possible_turns):
+            for phase in flow:
                 turn_settings = self._settings_snapshot(session_id)
-                active_agents = self._active_debate_agents(turn_settings)
-                if not active_agents:
-                    raise DebateError("At least one debater per team is required.")
-                current_max_turns = len(active_agents) * int(
-                    turn_settings.get("debate_rounds", debate_rounds)
-                )
-                if len(transcript) >= current_max_turns:
-                    break
-
-                bid = await self._select_turn_bid(
-                    topic=cleaned_topic,
-                    agents=active_agents,
-                    transcript=transcript,
-                    turn_index=turn_index,
-                    max_turns=current_max_turns,
-                    model=selected_model,
-                    session_settings=turn_settings,
-                    cost_tracker=cost_tracker,
-                )
-                if not bid:
-                    break
-
-                round_number = self._round_for_turn(len(transcript), len(active_agents))
+                agent = phase["agent"]
                 turn_model = self._resolve_agent_model(
-                    turn_settings, bid["agent"]["archetype"], selected_model
+                    turn_settings, agent["archetype"], selected_model
                 )
                 generation_settings = self._agent_generation_settings(
-                    turn_settings, bid["agent"]["archetype"]
+                    turn_settings, agent["archetype"]
                 )
                 content = await self._stream_agent_turn(
                     websocket=websocket,
                     session_id=session_id,
                     debate_id=debate_id,
                     topic=cleaned_topic,
-                    agent=bid["agent"],
+                    agent=agent,
                     model=turn_model,
-                    round_number=round_number,
+                    phase=phase,
                     transcript=transcript,
                     session_settings=turn_settings,
                     generation_settings=generation_settings,
-                    bid=bid,
                     cost_tracker=cost_tracker,
                 )
                 transcript.append(
                     {
-                        "speaker": bid["agent"]["speaker"],
-                        "role": bid["agent"]["role"],
-                        "team": bid["agent"]["team"],
-                        "archetype": bid["agent"]["archetype"],
-                        "round": round_number,
+                        "speaker": agent["speaker"],
+                        "role": agent["role"],
+                        "team": agent["team"],
+                        "archetype": agent["archetype"],
+                        "round": phase["index"],
                         "model": turn_model.name,
-                        "intent": bid["intent"],
-                        "target": bid["target"],
+                        "intent": phase["intent"],
+                        "target": phase["target"],
+                        "phase_key": phase["key"],
+                        "phase_title": phase["title"],
+                        "phase_index": phase["index"],
+                        "phase_total": phase["total"],
+                        "phase_kind": phase["kind"],
                         "content": content,
                     }
                 )
-                latest_analysis = analyze_debate(cleaned_topic, transcript)
+                latest_analysis = self._with_phase_metadata(
+                    analyze_debate(cleaned_topic, transcript),
+                    flow=flow,
+                    current_phase=phase,
+                    topic=cleaned_topic,
+                )
+                latest_analysis["session_charts"] = session_chart_data(
+                    self.db.list_debates(session_id),
+                    self.db.list_messages(session_id),
+                    debate_id,
+                )
                 await self._send_json(
                     websocket,
                     {
@@ -612,7 +613,7 @@ class DebateManager:
         return self.db.get_session_settings(session_id) or {}
 
     def _active_debate_agents(self, session_settings: dict[str, Any]) -> list[dict[str, Any]]:
-        debaters_per_team = max(1, min(4, int(session_settings.get("debaters_per_team", 3))))
+        debaters_per_team = max(1, min(4, int(session_settings.get("debaters_per_team", 2))))
         active_role_defs = [
             role_definition
             for role_definition in TEAM_ROLE_DEFINITIONS
@@ -635,6 +636,463 @@ class DebateManager:
                     }
                 )
         return agents
+
+    def _debate_flow(self, session_settings: dict[str, Any]) -> list[dict[str, Any]]:
+        debaters_per_team = max(1, min(4, int(session_settings.get("debaters_per_team", 2))))
+        debate_rounds = max(1, min(6, int(session_settings.get("debate_rounds", 2))))
+        cap = max(1, min(4, int(session_settings.get("discussion_messages_per_team", 3))))
+        agents = self._active_debate_agents(session_settings)
+        lookup = {agent["role"]: agent for agent in agents}
+        phases: list[dict[str, Any]] = []
+
+        def role(team: str, archetype: str) -> str:
+            return f"{team}_{archetype}"
+
+        def add(
+            key: str,
+            title: str,
+            role_id: str,
+            kind: str,
+            intent: str,
+            instruction: str,
+            target: str = "the debate topic",
+        ) -> None:
+            agent = lookup.get(role_id)
+            if not agent:
+                return
+            phases.append(
+                {
+                    "key": key,
+                    "title": title,
+                    "agent": agent,
+                    "kind": kind,
+                    "intent": intent,
+                    "instruction": instruction,
+                    "target": target,
+                }
+            )
+
+        def discussion(title: str, opening_team: str, key_prefix: str) -> None:
+            other_team = "con" if opening_team == "pro" else "pro"
+            order = [opening_team, other_team] * cap
+            counts = {"pro": 0, "con": 0}
+            for team in order:
+                if counts[team] >= cap:
+                    continue
+                counts[team] += 1
+                team_label = "Pro" if team == "pro" else "Con"
+                add(
+                    f"{key_prefix}_{team}_{counts[team]}",
+                    f"{title}: {team_label} Advocate Message {counts[team]}",
+                    role(team, "lead_advocate"),
+                    "discussion",
+                    f"speak for the {team_label} team in advocate-led discussion",
+                    "Speak as the Advocate for your whole team. Use your team's prior research, criticism, and cross-examination points where relevant. Respond to specific argument content, not turn numbers. Do not say 'my opponent says'.",
+                    "the latest unresolved clash",
+                )
+
+        def one_debater_open_discussion() -> None:
+            counts = {"pro": 0, "con": 0}
+            openers = ["pro" if index % 2 == 0 else "con" for index in range(debate_rounds)]
+            pattern: list[str] = []
+            for opener in openers:
+                other_team = "con" if opener == "pro" else "pro"
+                pattern.extend([opener, other_team])
+            if not pattern:
+                pattern = ["pro", "con"]
+            while min(counts.values()) < cap:
+                made_progress = False
+                for step_index, team in enumerate(pattern):
+                    if counts[team] >= cap:
+                        continue
+                    counts[team] += 1
+                    made_progress = True
+                    team_label = "Pro" if team == "pro" else "Con"
+                    mini_round = f"Mini-round {step_index // 2 + 1}"
+                    add(
+                        f"open_discussion_{team}_{counts[team]}",
+                        f"Open Discussion ({mini_round}): {team_label} Advocate Message {counts[team]}",
+                        role(team, "lead_advocate"),
+                        "discussion",
+                        f"speak for the {team_label} side in open discussion",
+                        "Speak naturally in open discussion. Answer, defend, attack, clarify, or add a point as needed. Address specific claims by content, not by turn number. Do not say 'my opponent says'.",
+                        "the strongest unresolved point",
+                    )
+                if not made_progress:
+                    break
+
+        add(
+            "pro_constructive",
+            "Pro Advocate Constructive Speech",
+            role("pro", "lead_advocate"),
+            "constructive",
+            "present the Pro case",
+            "Build the Pro case with clear claims, warrants, and stakes.",
+        )
+
+        if debaters_per_team == 1:
+            add(
+                "con_constructive",
+                "Con Advocate Constructive Speech",
+                role("con", "lead_advocate"),
+                "constructive",
+                "present the Con case",
+                "Build the Con case with clear counterclaims, warrants, and stakes.",
+                "the Pro constructive case",
+            )
+            add(
+                "con_cross_exam_pro",
+                "Con Advocate Cross-examines Pro",
+                role("con", "lead_advocate"),
+                "cross_exam",
+                "cross-examine the Pro case",
+                "Give one short setup sentence, then ask 2-4 pointed questions. Do not answer your own questions or deliver a full rebuttal.",
+                "the Pro constructive case",
+            )
+            add(
+                "pro_answers_rebuttal",
+                "Pro Advocate Answers + Rebuttal",
+                role("pro", "lead_advocate"),
+                "answer_rebuttal",
+                "answer cross-examination and rebut Con",
+                "Answer the strongest cross-examination questions, then attack or repair positions where useful.",
+                "the Con constructive and cross-exam questions",
+            )
+            add(
+                "pro_cross_exam_con",
+                "Pro Advocate Cross-examines Con",
+                role("pro", "lead_advocate"),
+                "cross_exam",
+                "cross-examine the Con case",
+                "Give one short setup sentence, then ask 2-4 pointed questions. Do not answer your own questions or deliver a full rebuttal.",
+                "the Con constructive case",
+            )
+            add(
+                "con_answers_rebuttal",
+                "Con Advocate Answers + Rebuttal",
+                role("con", "lead_advocate"),
+                "answer_rebuttal",
+                "answer cross-examination and rebut Pro",
+                "Answer the strongest cross-examination questions, then attack or repair positions where useful.",
+                "the Pro rebuttal and cross-exam questions",
+            )
+            one_debater_open_discussion()
+        else:
+            if debaters_per_team == 2:
+                add(
+                    "con_critic_cross_exam_pro_advocate",
+                    "Con Critic Cross-examines Pro Advocate",
+                    role("con", "rebuttal_critic"),
+                    "cross_exam",
+                    "cross-examine the Pro Advocate",
+                    "Give one short setup sentence, then ask 2-4 pointed questions. Do not deliver your rebuttal yet.",
+                    "the Pro Advocate's constructive",
+                )
+                add(
+                    "con_constructive",
+                    "Con Advocate Constructive Speech",
+                    role("con", "lead_advocate"),
+                    "constructive",
+                    "present the Con case",
+                    "Build the Con case with clear counterclaims, warrants, and stakes.",
+                    "the Pro constructive case and Con Critic's cross-exam pressure",
+                )
+                add(
+                    "pro_critic_cross_exam_con_advocate",
+                    "Pro Critic Cross-examines Con Advocate",
+                    role("pro", "rebuttal_critic"),
+                    "cross_exam",
+                    "cross-examine the Con Advocate",
+                    "Give one short setup sentence, then ask 2-4 pointed questions. Do not deliver your rebuttal yet.",
+                    "the Con Advocate's constructive",
+                )
+            else:
+                add(
+                    "con_constructive",
+                    "Con Advocate Constructive Speech",
+                    role("con", "lead_advocate"),
+                    "constructive",
+                    "present the Con case",
+                    "Build the Con case with clear counterclaims, warrants, and stakes.",
+                    "the Pro constructive case",
+                )
+
+                if debaters_per_team >= 4:
+                    add(
+                        "con_examiner_cross_exam_pro_advocate",
+                        "Con Examiner Cross-examines Pro Advocate",
+                        role("con", "cross_examiner"),
+                        "cross_exam",
+                        "cross-examine the Pro Advocate",
+                        "Use Socratic pressure. Give one short setup sentence, then ask 2-4 pointed questions only.",
+                        "the Pro Advocate's opening constructive",
+                    )
+                    add(
+                        "pro_examiner_cross_exam_con_advocate",
+                        "Pro Examiner Cross-examines Con Advocate",
+                        role("pro", "cross_examiner"),
+                        "cross_exam",
+                        "cross-examine the Con Advocate",
+                        "Use Socratic pressure. Give one short setup sentence, then ask 2-4 pointed questions only.",
+                        "the Con Advocate's opening constructive",
+                    )
+
+            if debaters_per_team >= 3:
+                add(
+                    "pro_researcher_evidence",
+                    "Pro Researcher Evidence Presentation",
+                    role("pro", "evidence_researcher"),
+                    "evidence",
+                    "add Pro evidence and examples",
+                    "Add evidence, examples, uncertainty notes, and verification needs. Do not invent citations when web search is unavailable.",
+                    "the Pro case and Con pressure points",
+                )
+                add(
+                    "con_researcher_evidence",
+                    "Con Researcher Evidence Presentation",
+                    role("con", "evidence_researcher"),
+                    "evidence",
+                    "add Con evidence and counter-evidence",
+                    "Add evidence, examples, uncertainty notes, and verification needs. Do not invent citations when web search is unavailable.",
+                    "the Con case and Pro pressure points",
+                )
+
+            if debaters_per_team >= 4:
+                add(
+                    "con_examiner_cross_exam_pro_researcher",
+                    "Con Examiner Cross-examines Pro Researcher",
+                    role("con", "cross_examiner"),
+                    "cross_exam",
+                    "cross-examine the Pro Researcher",
+                    "Ask 2-4 questions that test evidence quality, assumptions, and missing verification. Do not rebut fully yet.",
+                    "the Pro Researcher's evidence",
+                )
+                add(
+                    "pro_examiner_cross_exam_con_researcher",
+                    "Pro Examiner Cross-examines Con Researcher",
+                    role("pro", "cross_examiner"),
+                    "cross_exam",
+                    "cross-examine the Con Researcher",
+                    "Ask 2-4 questions that test evidence quality, assumptions, and missing verification. Do not rebut fully yet.",
+                    "the Con Researcher's evidence",
+                )
+
+            discussion("Discussion Time 1", "pro", "discussion_1")
+            rebuttal_order = [("pro", "Con"), ("con", "Pro")] if debaters_per_team == 2 else [("con", "Pro"), ("pro", "Con")]
+            for team, target_team in rebuttal_order:
+                team_label = "Pro" if team == "pro" else "Con"
+                add(
+                    f"{team}_critic_rebuttal",
+                    f"{team_label} Critic Rebuttal",
+                    role(team, "rebuttal_critic"),
+                    "rebuttal",
+                    f"attack the {target_team} case",
+                    f"Synthesize the biggest weaknesses in the {target_team} case, including cross-exam and evidence problems.",
+                    f"the full {target_team} case so far",
+                )
+            for discussion_index in range(2, debate_rounds + 1):
+                opening_team = "con" if discussion_index % 2 == 0 else "pro"
+                discussion(
+                    f"Discussion Time {discussion_index}",
+                    opening_team,
+                    f"discussion_{discussion_index}",
+                )
+
+        add(
+            "pro_closing",
+            "Pro Advocate Closing Summary",
+            role("pro", "lead_advocate"),
+            "closing",
+            "deliver the Pro closing summary",
+            "Rebuild the Pro case, answer the most damaging objections, and give a concise final appeal.",
+            "the whole debate",
+        )
+        add(
+            "con_closing",
+            "Con Advocate Closing Summary",
+            role("con", "lead_advocate"),
+            "closing",
+            "deliver the Con closing summary",
+            "Rebuild the Con case, answer the most damaging objections, and give a concise final appeal.",
+            "the whole debate",
+        )
+
+        total = len(phases)
+        for index, phase in enumerate(phases, start=1):
+            phase["index"] = index
+            phase["total"] = total
+        return phases
+
+    def _with_phase_metadata(
+        self,
+        analysis: dict[str, Any],
+        *,
+        flow: list[dict[str, Any]],
+        current_phase: dict[str, Any] | None,
+        topic: str,
+    ) -> dict[str, Any]:
+        positions = self.debate_positions(topic)
+        phase_sequence = [
+            {
+                "key": phase["key"],
+                "title": phase["title"],
+                "kind": phase["kind"],
+                "index": phase["index"],
+                "total": phase["total"],
+                "speaker": phase["agent"]["speaker"],
+                "team": phase["agent"]["team"],
+            }
+            for phase in flow
+        ]
+        analysis["phase"] = {
+            "current": {
+                "key": current_phase["key"],
+                "title": current_phase["title"],
+                "kind": current_phase["kind"],
+                "index": current_phase["index"],
+                "total": current_phase["total"],
+                "speaker": current_phase["agent"]["speaker"],
+                "team": current_phase["agent"]["team"],
+            }
+            if current_phase
+            else None,
+            "completed": current_phase["index"] if current_phase else 0,
+            "total": len(flow),
+            "flow_name": "Professional Debate Flow",
+            "sequence": phase_sequence,
+            "pro_position": positions["pro"],
+            "con_position": positions["con"],
+        }
+        return analysis
+
+    def phase_metadata_from_messages(
+        self, analysis: dict[str, Any], messages: list[dict[str, Any]], topic: str
+    ) -> dict[str, Any]:
+        positions = self.debate_positions(topic)
+        phase_rows = [message for message in messages if message.get("phase_key")]
+        sequence_by_key: dict[str, dict[str, Any]] = {}
+        for message in phase_rows:
+            key = str(message.get("phase_key") or "")
+            if not key or key in sequence_by_key:
+                continue
+            sequence_by_key[key] = {
+                "key": key,
+                "title": message.get("phase_title") or key.replace("_", " ").title(),
+                "kind": message.get("phase_kind") or "turn",
+                "index": int(message.get("phase_index") or len(sequence_by_key) + 1),
+                "total": int(message.get("phase_total") or 0),
+                "speaker": message.get("speaker") or "",
+                "team": "pro"
+                if str(message.get("role") or "").startswith("pro_")
+                else "con"
+                if str(message.get("role") or "").startswith("con_")
+                else "neutral",
+            }
+        sequence = sorted(sequence_by_key.values(), key=lambda item: item["index"])
+        current = sequence[-1] if sequence else None
+        total = max([item["total"] for item in sequence] or [len(sequence)])
+        analysis["phase"] = {
+            "current": current,
+            "completed": current["index"] if current else 0,
+            "total": total,
+            "flow_name": "Professional Debate Flow",
+            "sequence": sequence,
+            "pro_position": positions["pro"],
+            "con_position": positions["con"],
+        }
+        return analysis
+
+    def debate_positions(self, topic: str) -> dict[str, str]:
+        core = self._position_topic_core(topic)
+        option_split = self._split_or_topic(core)
+        if option_split:
+            shared_prefix, pro_option, con_option = option_split
+            pro_clause = self._tidy_position_clause(f"{shared_prefix}{pro_option}")
+            con_clause = self._tidy_position_clause(f"{shared_prefix}{con_option}")
+            not_clause = self._tidy_position_clause(pro_option)
+            return {
+                "pro": f"Pro argues that {pro_clause}.",
+                "con": f"Con argues that {con_clause}, not {not_clause}.",
+            }
+
+        should_match = re.match(r"(?i)^should\s+(.+)$", core)
+        if should_match:
+            remainder = should_match.group(1).strip().rstrip("?.")
+            words = remainder.split()
+            if len(words) >= 2:
+                subject_width = 2 if words[0].lower() in {"the", "a", "an"} and len(words) >= 3 else 1
+                subject = " ".join(words[:subject_width])
+                action = " ".join(words[subject_width:])
+                return {
+                    "pro": f"Pro argues that {subject} should {action}.",
+                    "con": f"Con argues that {subject} should not {action}.",
+                }
+
+        readable = core.rstrip("?.")
+        return {
+            "pro": f"Pro argues that this position is correct: {readable}.",
+            "con": f"Con argues that this position is wrong or too weak: {readable}.",
+        }
+
+    def _position_topic_core(self, topic: str) -> str:
+        core = " ".join(str(topic).strip().split()).strip(" ?.!")
+        patterns = (
+            r"(?i)^please\s+",
+            r"(?i)^(debate|discuss|argue|analyze)\s+(about\s+)?",
+            r"(?i)^(whether|if)\s+",
+        )
+        changed = True
+        while changed:
+            changed = False
+            for pattern in patterns:
+                next_core = re.sub(pattern, "", core).strip()
+                if next_core != core:
+                    core = next_core
+                    changed = True
+        return core or str(topic).strip()
+
+    def _split_or_topic(self, core: str) -> tuple[str, str, str] | None:
+        parts = re.split(r"\s+or\s+", core, maxsplit=1, flags=re.IGNORECASE)
+        if len(parts) != 2:
+            return None
+        left, right = parts[0].strip(), parts[1].strip().rstrip("?.")
+        if not left or not right:
+            return None
+        lower_left = left.lower()
+        best_index = -1
+        best_prep = ""
+        for prep in (" in ", " at ", " during ", " for ", " with ", " without ", " before ", " after ", " on "):
+            index = lower_left.rfind(prep)
+            if index > best_index:
+                best_index = index
+                best_prep = prep
+        if best_index == -1:
+            for marker in (" should ", " should not ", " can ", " could ", " would ", " will "):
+                index = lower_left.rfind(marker)
+                if index > best_index:
+                    best_index = index
+                    best_prep = marker
+        if best_index == -1:
+            return None
+        shared_prefix = left[: best_index + len(best_prep)]
+        pro_option = left[best_index + len(best_prep) :].strip()
+        if not pro_option:
+            return None
+        return shared_prefix, pro_option, right
+
+    def _tidy_position_clause(self, text: str) -> str:
+        cleaned = " ".join(str(text).strip().split()).strip(" .,;:!?-")
+        cleaned = re.sub(
+            r"(?i)\b(in|during)\s+(morning|afternoon|evening)\b",
+            lambda match: f"{match.group(1)} the {match.group(2)}",
+            cleaned,
+        )
+        cleaned = re.sub(
+            r"(?i)^\s*(morning|afternoon|evening)\s*$",
+            lambda match: f"the {match.group(1)}",
+            cleaned,
+        )
+        return cleaned
 
     def _assignment_payload(
         self, session_settings: dict[str, Any], default_model: SupportedModel
@@ -695,236 +1153,6 @@ class DebateManager:
         )
         return bool(council_settings.get("always_on", False))
 
-    def _round_for_turn(self, completed_turns: int, active_debater_count: int) -> int:
-        return (completed_turns // max(1, active_debater_count)) + 1
-
-    async def _select_turn_bid(
-        self,
-        *,
-        topic: str,
-        agents: list[dict[str, Any]],
-        transcript: list[dict[str, Any]],
-        turn_index: int,
-        max_turns: int,
-        model: SupportedModel,
-        session_settings: dict[str, Any],
-        cost_tracker: CostTracker | None = None,
-    ) -> dict[str, Any] | None:
-        if turn_index >= max_turns:
-            return None
-        latest = transcript[-1] if transcript else None
-
-        if not latest:
-            opener = next(agent for agent in agents if agent["team"] == "pro" and agent["archetype"] == "lead_advocate")
-            return self._bid(opener, 0.98, "open the affirmative case", "the original topic", "A debate needs a clear Pro opening.")
-
-        if len(transcript) == 1:
-            opener = next(agent for agent in agents if agent["team"] == "con" and agent["archetype"] == "lead_advocate")
-            return self._bid(opener, 0.98, "open the opposing case", latest["content"], "The Con team needs a direct opening response.")
-
-        moderator_bid = await self._moderator_select_turn_bid(
-            topic=topic,
-            agents=agents,
-            transcript=transcript,
-            model=model,
-            session_settings=session_settings,
-            cost_tracker=cost_tracker,
-        )
-        if moderator_bid == "END":
-            return None
-        if isinstance(moderator_bid, dict):
-            return moderator_bid
-
-        return self._local_select_turn_bid(agents=agents, transcript=transcript)
-
-    async def _moderator_select_turn_bid(
-        self,
-        *,
-        topic: str,
-        agents: list[dict[str, Any]],
-        transcript: list[dict[str, Any]],
-        model: SupportedModel,
-        session_settings: dict[str, Any],
-        cost_tracker: CostTracker | None = None,
-    ) -> dict[str, Any] | str | None:
-        if settings.mock_llm or acompletion is None or not model.api_key:
-            return None
-
-        agent_lookup = {agent["role"]: agent for agent in agents}
-        normalized_lookup = {
-            self._normalize_role_token(agent["speaker"]): agent
-            for agent in agents
-        }
-        normalized_lookup.update(
-            {self._normalize_role_token(agent["role"]): agent for agent in agents}
-        )
-        candidate_lines = "\n".join(
-            f"- {agent['role']}: {agent['speaker']} | {agent['team_label']} | {agent['job']}"
-            for agent in agents
-        )
-        recent_transcript = self._format_transcript(
-            self._context_slice(transcript, int(session_settings.get("context_window", 2)) + 1)
-        )
-        prompt = dedent(
-            f"""
-            Topic: {topic}
-
-            Recent debate transcript:
-            {recent_transcript}
-
-            Valid speakers:
-            {candidate_lines}
-
-            Choose the next speaker like a human debate moderator. Do not follow a fixed role loop.
-            Prefer the person who has a useful disagreement, answer, clarification, evidence addition, or pressure question.
-            Return END only if another debater turn would be repetitive or the debate is ready for judging.
-
-            Return strict JSON only:
-            {{"role":"one valid role id or END","urgency":0.0-1.0,"intent":"short intent","target":"point being answered","reason":"why this speaker requested the floor"}}
-            """
-        ).strip()
-        try:
-            response = await acompletion(
-                model=model.litellm_model,
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a neutral debate moderator. Select the next floor request. "
-                            "You are not a debater and you do not write the debate turn."
-                        ),
-                    },
-                    {"role": "user", "content": prompt},
-                ],
-                api_key=model.api_key,
-                stream=False,
-                temperature=0.0,
-                max_tokens=180,
-                timeout=min(settings.request_timeout_seconds, 30),
-            )
-            text = self._completion_text(response)
-            if cost_tracker is not None:
-                cost_tracker.record_call(
-                    model_name=model.name,
-                    input_text=message_input_text(
-                        [
-                            {
-                                "role": "system",
-                                "content": "You are a neutral debate moderator. Select the next floor request.",
-                            },
-                            {"role": "user", "content": prompt},
-                        ]
-                    ),
-                    output_text=text,
-                    operation="moderator",
-                )
-            payload = self._parse_json_object(text)
-            if not payload:
-                return None
-            role = str(payload.get("role", "")).strip()
-            if role.upper() == "END":
-                return "END"
-            agent = agent_lookup.get(role) or normalized_lookup.get(self._normalize_role_token(role))
-            if not agent:
-                return None
-            urgency = self._clip_float(float(payload.get("urgency", 0.5)), 0.0, 1.0)
-            intent = str(payload.get("intent") or agent["default_intent"])
-            target = str(payload.get("target") or transcript[-1].get("content", "the latest point"))
-            reason = str(payload.get("reason") or "the moderator selected this floor request")
-            return self._bid(agent, urgency, intent, target, reason)
-        except Exception:
-            return None
-
-    def _local_select_turn_bid(
-        self,
-        *,
-        agents: list[dict[str, Any]],
-        transcript: list[dict[str, Any]],
-    ) -> dict[str, Any] | None:
-        spoken_by_role = {turn.get("role") for turn in transcript}
-        latest = transcript[-1] if transcript else None
-        bids = []
-        for agent in agents:
-            if latest and agent["role"] == latest.get("role"):
-                continue
-            bid = self._score_agent_bid(agent, latest, transcript, spoken_by_role)
-            if bid["urgency"] > 0.12:
-                bids.append(bid)
-
-        if not bids:
-            return None
-        return max(bids, key=lambda bid: bid["urgency"])
-
-    def _score_agent_bid(
-        self,
-        agent: dict[str, Any],
-        latest: dict[str, Any] | None,
-        transcript: list[dict[str, Any]],
-        spoken_by_role: set[str],
-    ) -> dict[str, Any]:
-        urgency = 0.2
-        reasons = []
-        intent = agent["default_intent"]
-        target = latest["content"] if latest else "the original topic"
-        latest_team = latest.get("team") if latest else None
-
-        if agent["role"] not in spoken_by_role:
-            urgency += 0.12
-            reasons.append("this role has not spoken yet")
-        if latest_team and latest_team != agent["team"]:
-            urgency += 0.24
-            reasons.append("the other team just made a point")
-        if latest and "?" in str(latest.get("content", "")) and latest_team != agent["team"]:
-            urgency += 0.18
-            intent = "answer a pressure question"
-            reasons.append("there is a direct question to answer")
-
-        archetype = agent["archetype"]
-        latest_text = str(latest.get("content", "") if latest else "").lower()
-        if archetype == "rebuttal_critic" and latest_team != agent["team"]:
-            urgency += 0.22
-            intent = "rebut the latest opposing claim"
-        elif archetype == "evidence_researcher":
-            if any(word in latest_text for word in ("evidence", "data", "study", "because", "example")):
-                urgency += 0.18
-                intent = "test and add evidence"
-            elif agent["role"] not in spoken_by_role:
-                urgency += 0.12
-        elif archetype == "cross_examiner":
-            recent_questions = sum(1 for turn in transcript[-4:] if "?" in str(turn.get("content", "")))
-            if recent_questions < 2:
-                urgency += 0.16
-                intent = "ask a pressure question"
-        elif archetype == "lead_advocate" and latest_team != agent["team"]:
-            urgency += 0.1
-            intent = "defend the team's main thesis"
-
-        recent_roles = [turn.get("role") for turn in transcript[-3:]]
-        if agent["role"] in recent_roles:
-            urgency -= 0.22
-        recent_teams = [turn.get("team") for turn in transcript[-2:]]
-        if len(recent_teams) == 2 and recent_teams[0] == recent_teams[1] == agent["team"]:
-            urgency -= 0.28
-
-        reason = "; ".join(reasons) or "this contribution best fits the open tension"
-        return self._bid(agent, max(0.0, min(1.0, urgency)), intent, target, reason)
-
-    def _bid(
-        self,
-        agent: dict[str, Any],
-        urgency: float,
-        intent: str,
-        target: str,
-        reason: str,
-    ) -> dict[str, Any]:
-        return {
-            "agent": agent,
-            "urgency": round(urgency, 3),
-            "intent": intent,
-            "target": self._clip_for_prompt(target, 360),
-            "reason": reason,
-        }
-
     def _clip_for_prompt(self, text: str, limit: int) -> str:
         normalized = " ".join(str(text).strip().split())
         if len(normalized) <= limit:
@@ -941,12 +1169,6 @@ class DebateManager:
             return None
         return payload if isinstance(payload, dict) else None
 
-    def _normalize_role_token(self, value: str) -> str:
-        return re.sub(r"[^a-z0-9]+", "_", value.lower()).strip("_")
-
-    def _clip_float(self, value: float, minimum: float, maximum: float) -> float:
-        return max(minimum, min(maximum, value))
-
     async def _stream_agent_turn(
         self,
         *,
@@ -956,11 +1178,10 @@ class DebateManager:
         topic: str,
         agent: dict[str, Any],
         model: SupportedModel,
-        round_number: int,
+        phase: dict[str, Any],
         transcript: list[dict[str, Any]],
         session_settings: dict[str, Any],
         generation_settings: dict[str, Any],
-        bid: dict[str, Any],
         cost_tracker: CostTracker | None = None,
     ) -> str:
         stream_id = str(uuid4())
@@ -977,16 +1198,22 @@ class DebateManager:
                     "speaker": agent["speaker"],
                     "model": model.name,
                     "content": "",
+                    "phase_key": phase["key"],
+                    "phase_title": phase["title"],
+                    "phase_index": phase["index"],
+                    "phase_total": phase["total"],
+                    "phase_kind": phase["kind"],
                     "sequence": 0,
                     "created_at": utc_now(),
                 },
-                "round": round_number,
+                "round": phase["index"],
             }
         )
 
         messages = self._agent_messages(
-            topic, agent, round_number, transcript, session_settings, generation_settings, bid
+            topic, agent, phase, transcript, session_settings, generation_settings
         )
+        cost_start = len(cost_tracker.entries) if cost_tracker else 0
         try:
             content = await self._stream_completion(
                 websocket,
@@ -1009,6 +1236,7 @@ class DebateManager:
                 speaker=agent["speaker"],
                 model=model.name,
                 exc=exc,
+                phase=phase,
             )
             raise
         saved = self.db.add_message(
@@ -1018,6 +1246,12 @@ class DebateManager:
             speaker=agent["speaker"],
             model=model.name,
             content=content,
+            cost_summary=cost_tracker.summary_since(
+                cost_start, session_settings.get("cost_currency", "USD")
+            )
+            if cost_tracker
+            else None,
+            phase=phase,
         )
         await self._send_json(
             websocket,
@@ -1063,6 +1297,7 @@ class DebateManager:
         messages = self._judge_messages(
             topic, transcript, analysis, session_settings, generation_settings, judge_assistant_report
         )
+        cost_start = len(cost_tracker.entries) if cost_tracker else 0
         try:
             content = await self._stream_completion(
                 websocket,
@@ -1085,7 +1320,12 @@ class DebateManager:
                 speaker="Judge",
                 model=model.name,
                 exc=exc,
-                cost_summary=cost_tracker.summary(session_settings.get("cost_currency", "USD"))
+                cost_summary=cost_tracker.summary_since(
+                    cost_start, session_settings.get("cost_currency", "USD")
+                )
+                if cost_tracker
+                else None,
+                debate_cost_summary=cost_tracker.summary(session_settings.get("cost_currency", "USD"))
                 if cost_tracker
                 else None,
             )
@@ -1097,7 +1337,12 @@ class DebateManager:
             speaker="Judge",
             model=model.name,
             content=content,
-            cost_summary=cost_tracker.summary(session_settings.get("cost_currency", "USD"))
+            cost_summary=cost_tracker.summary_since(
+                cost_start, session_settings.get("cost_currency", "USD")
+            )
+            if cost_tracker
+            else None,
+            debate_cost_summary=cost_tracker.summary(session_settings.get("cost_currency", "USD"))
             if cost_tracker
             else None,
         )
@@ -1144,6 +1389,7 @@ class DebateManager:
         messages = self._judge_assistant_messages(
             topic, transcript, analysis, session_settings, generation_settings
         )
+        cost_start = len(cost_tracker.entries) if cost_tracker else 0
         try:
             content = await self._stream_completion(
                 websocket,
@@ -1166,6 +1412,11 @@ class DebateManager:
                 speaker="Judge Assistant",
                 model=model.name,
                 exc=exc,
+                cost_summary=cost_tracker.summary_since(
+                    cost_start, session_settings.get("cost_currency", "USD")
+                )
+                if cost_tracker
+                else None,
             )
             raise
         saved = self.db.add_message(
@@ -1175,6 +1426,11 @@ class DebateManager:
             speaker="Judge Assistant",
             model=model.name,
             content=content,
+            cost_summary=cost_tracker.summary_since(
+                cost_start, session_settings.get("cost_currency", "USD")
+            )
+            if cost_tracker
+            else None,
         )
         await self._send_json(
             websocket,
@@ -1194,6 +1450,8 @@ class DebateManager:
         model: str,
         exc: Exception,
         cost_summary: dict | None = None,
+        debate_cost_summary: dict | None = None,
+        phase: dict | None = None,
     ) -> str:
         content = self._failure_message(exc)
         await self._send_json(
@@ -1208,6 +1466,8 @@ class DebateManager:
             model=model,
             content=content,
             cost_summary=cost_summary,
+            debate_cost_summary=debate_cost_summary,
+            phase=phase,
         )
         await self._send_json(
             websocket,
@@ -1475,11 +1735,10 @@ class DebateManager:
         self,
         topic: str,
         agent: dict[str, Any],
-        round_number: int,
+        phase: dict[str, Any],
         transcript: list[dict[str, Any]],
         session_settings: dict[str, Any],
         generation_settings: dict[str, Any],
-        bid: dict[str, Any],
     ) -> list[dict[str, str]]:
         latest_speaker = transcript[-1]["speaker"] if transcript else "the previous speaker"
         previous_debate = self._format_transcript(
@@ -1490,28 +1749,42 @@ class DebateManager:
         advanced_notes = []
         if agent["archetype"] == "evidence_researcher" and generation_settings.get("agent_web_search"):
             advanced_notes.append(
-                "Web-search mode is enabled for this researcher; when no live source is available, mark claims needing verification instead of inventing citations."
+                "Web-search mode is enabled for this researcher. Cite real source URLs only if you actually used a live source. If no live source is available, write 'No live citations used' instead of inventing citations."
             )
         if session_settings.get("fact_check_mode"):
             advanced_notes.append(
                 "Fact-check mode is enabled; flag uncertain factual claims and separate evidence from interpretation."
             )
         advanced_prompt = "\n".join(advanced_notes) or "No extra advanced constraints."
+        phase_kind = str(phase.get("kind", "turn"))
+        phase_rules = {
+            "constructive": "Build your side's case. Use clear claims, reasons, stakes, and limits. Do not drift into judging.",
+            "cross_exam": "Ask questions only after one short setup sentence. Ask 2-4 pointed questions. Do not answer your own questions and do not deliver a full rebuttal.",
+            "answer_rebuttal": "Answer the strongest questions directly, then repair your own case or attack the other side where useful.",
+            "evidence": "Add evidence, examples, and uncertainty notes. If web search is unavailable, do not invent citations; mark claims that need verification.",
+            "rebuttal": "Synthesize weaknesses in the other team's case and defend your own side from the strongest pressure.",
+            "discussion": "Only the Advocate speaks in discussion. Speak for the whole team, using teammate evidence, criticism, and cross-exam points from the transcript. Respond naturally to specific argument content, not turn numbers.",
+            "closing": "Give a concise final appeal that rebuilds your side, answers the most damaging objections, and names the voting issue.",
+        }.get(phase_kind, "Complete this debate phase naturally and stay in role.")
         user_prompt = dedent(
             f"""
             Topic: {topic}
 
+            Current phase: {phase["title"]} ({phase["index"]}/{phase["total"]})
+            Phase goal: {phase["intent"]}
+            Target to address: {phase["target"]}
+            Phase instruction: {phase["instruction"]}
+
             Debate so far:
             {previous_debate}
 
-            You requested the floor because: {bid["reason"]}
-            Current intent: {bid["intent"]}.
-            Target to address: {bid["target"]}.
             Latest speaker to answer: {latest_speaker}.
 
             Speak naturally as {agent["speaker"]}. Address another debater directly when useful, like a human debate.
             Prefer direct phrasing such as "{latest_speaker}, you said..." or "I disagree with your point about...".
             Do not narrate the debate with phrases like "my opponent says", "my opponent argues", "the opponent says", or "the opposing side says".
+            Address specific arguments by content, not by turn number or step number.
+            Phase-specific rules: {phase_rules}
             Do your role's job, stay on the {agent["stance_label"]}, and keep this turn under {word_limit} words.
             If you disagree, say exactly what you disagree with and why. If you add evidence, explain how it changes the debate.
             """
@@ -1532,6 +1805,7 @@ class DebateManager:
                     Use polished Markdown when useful.
                     Be responsive to the actual prior speaker, not generic. Stay in role and do not judge the debate.
                     You are in the room with the other debaters. Use their speaker names or second-person address; do not say "my opponent" or "the opponent".
+                    Follow the professional phase flow exactly. Do not skip ahead to judging or closing unless the current phase asks for it.
                     """
                 ).strip(),
             },
@@ -1555,6 +1829,8 @@ class DebateManager:
                     f"""
                     You are the Judge Assistant. You are neutral and you do not choose the final winner.
                     Your job is to help the Judge by finding missed points, unanswered claims, evidence gaps, contradictions, and useful statistics.
+                    The debate follows a professional phase flow. Use phase labels in the transcript to tell whether a point came from constructive, cross-examination, evidence, rebuttal, discussion, or closing.
+                    Discussion phases are Advocate-only team spokesperson exchanges; do not penalize missing Researcher/Critic/Examiner discussion turns there.
                     Never expose hidden reasoning, planning notes, or <think> blocks.
                     Tone: {session_settings.get("debate_tone", "Academic")}.
                     Language: {session_settings.get("language", "English")}.
@@ -1609,6 +1885,7 @@ class DebateManager:
                 "content": (
                     "You are the Judge AI. You are already the final arbiter of this debate. "
                     "Never mention that the user wants you to judge. Never expose hidden reasoning or <think> blocks. "
+                    "The transcript is phase-structured; respect what each phase was supposed to do. "
                     "Give a concrete, confident verdict. Pick a winner, state exactly why, and identify what would change your mind. "
                     "If space is tight, use shorter bullets instead of leaving the verdict unfinished."
                 ),
@@ -1702,7 +1979,10 @@ class DebateManager:
             - Frontend: Next.js, React, TypeScript, Tailwind CSS.
             - Model availability: built-in MODEL_MAP maps each supported model to one provider. API keys unlock provider model groups; model names do not go in .env.
             - Routing: each user message first passes a balanced safety lock, then an AI-first intent router decides Council Assistant chat vs multi-agent debate unless Council Assistant Always On is enabled.
-            - Debate engine: two teams, Pro and Con, with 1-4 debaters per team. Roles can include Lead Advocate, Rebuttal Critic, Evidence Researcher, and Cross-Examiner.
+            - Debate engine: two teams, Pro and Con, with 1-4 debaters per team. Roles can include Advocate, Rebuttal Critic, Evidence Researcher, and Cross-Examiner.
+            - Debate flow: professional fixed phases replace the old moderator loop. One-debater mode uses constructive, cross-exam, answer/rebuttal, one Open Discussion with Pro-open and Con-open mini-rounds, closings, Judge Assistant, then Judge. Two-to-four-debater modes use two advocate-led Discussion Time phases: Pro Advocate opens the first, Con Advocate opens the second.
+            - Discussion Time: only the Advocates speak as team spokespersons, but they use all teammate material from researchers, critics, and examiners. The setting named Discussion Messages Per Team caps each team at 1-4 messages.
+            - Cross-examination: the speaking role gives one short setup sentence and 2-4 pointed questions, not a full rebuttal. Later answer/rebuttal phases should answer the strongest questions and then repair or attack naturally.
             - Neutral agents: optional Judge Assistant audits missed points and evidence gaps; Judge produces the final verdict.
             - Limits: max 10 chat sessions and max 3 simultaneous debates.
             - Chat settings are per-chat. Changes apply to the next AI message/turn, not a role that is already streaming.
@@ -2015,9 +2295,14 @@ class DebateManager:
     def _format_transcript(self, transcript: list[dict[str, Any]]) -> str:
         if not transcript:
             return "No prior turns yet."
-        return "\n\n".join(
-            f"{turn['speaker']} ({turn['model']}): {turn['content']}" for turn in transcript
-        )
+        lines = []
+        for turn in transcript:
+            phase_title = str(turn.get("phase_title") or "").strip()
+            phase_prefix = f"[{phase_title}] " if phase_title else ""
+            lines.append(
+                f"{phase_prefix}{turn['speaker']} ({turn['model']}): {turn['content']}"
+            )
+        return "\n\n".join(lines)
 
     def _extract_delta(self, chunk: Any) -> str:
         if isinstance(chunk, dict):

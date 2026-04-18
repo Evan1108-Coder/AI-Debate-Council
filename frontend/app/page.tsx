@@ -34,6 +34,7 @@ import type {
 } from "@/types";
 
 const MAX_SESSIONS = 10;
+const USER_INPUT_MAX_CHARS = 5500;
 const WEBSOCKET_CONNECT_RETRIES = 2;
 const WEBSOCKET_RETRY_DELAY_MS = 1200;
 type ClearTarget = { session: ChatSession; mode: "history" | "memory" };
@@ -579,6 +580,10 @@ export default function Home() {
     if (!content) {
       return;
     }
+    if ((draftBySession[selectedId] ?? "").length > USER_INPUT_MAX_CHARS) {
+      setError(`Please shorten your message to ${USER_INPUT_MAX_CHARS} characters or less.`);
+      return;
+    }
     if (!modelName) {
       setError("Choose one unlocked model before sending.");
       return;
@@ -606,7 +611,9 @@ export default function Home() {
       setAnalyticsHistoryBySession((current) => ({ ...current, [sessionId]: [] }));
       setStatusBySession((current) => ({
         ...current,
-        [sessionId]: `Debate running on ${event.selected_model.name}. ${event.active_debates} active debate(s).`
+        [sessionId]: event.positions
+          ? `${event.positions.pro} ${event.positions.con}`
+          : `Pro argues that this position is correct: ${event.topic}. Con argues that this position is wrong or too weak: ${event.topic}.`
       }));
       return;
     }
@@ -694,10 +701,6 @@ export default function Home() {
       setAnalyticsHistoryBySession((current) => ({
         ...current,
         [sessionId]: mergeAnalyticsHistory(current[sessionId] ?? [], event.analysis)
-      }));
-      setStatusBySession((current) => ({
-        ...current,
-        [sessionId]: `Round ${event.round} analytics updated.`
       }));
       return;
     }

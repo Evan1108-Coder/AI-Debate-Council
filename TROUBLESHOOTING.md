@@ -578,9 +578,9 @@ Note: Team role settings apply to both Pro and Con versions of that role.
 
 Try:
 
-- Reducing debate rounds in Chat Settings (1–2 rounds usually suffice).
-- Setting debaters per team to 2 or 3 (4 debaters with many rounds can get repetitive).
-- The moderator LLM can signal "END" to stop early if it detects repetition, but this requires a real (non-mock) model.
+- Lowering Debate rounds or Discussion Messages Per Team in Chat Settings.
+- Setting debaters per team to 2 or 3. Four debaters per team produces a longer professional flow.
+- Keeping response length concise for Critic, Researcher, and Examiner roles.
 
 ### Response Gets Truncated
 
@@ -652,8 +652,8 @@ These providers may have different error formats. Check:
 
 The debate uses multiple streamed model calls sequentially. Each turn waits for the previous one to finish. To speed things up:
 
-- **Reduce debate rounds**: Set `DEBATE_ROUNDS=1` in `.env` or change it per chat in Chat Settings.
-- **Reduce debaters per team**: 2 debaters × 1 round = 4 turns + judge. 4 debaters × 3 rounds = 24 turns + judge assistant + judge.
+- **Reduce discussion length**: Lower Debate rounds or Discussion Messages Per Team in Chat Settings.
+- **Reduce debaters per team**: 2 debaters per team gives a shorter Advocate/Critic flow. 4 debaters per team adds Researchers and Examiners, so it takes longer.
 - **Use faster models**: `gpt-4o-mini`, `claude-haiku-4-5`, `gemini-2.5-flash-lite`, and `llama-3.3-70b` are generally faster than their larger counterparts.
 - **Use Groq**: Groq's inference is very fast for Llama models.
 - **Increase timeout**: If turns are timing out, increase `LITELLM_TIMEOUT_SECONDS` in `.env`.

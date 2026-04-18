@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from .analytics import analyze_debate
+from .analytics import analyze_debate, session_chart_data
 from .config import settings
 from .database import Database
 from .debate import ClientDisconnectedError, DebateError, DebateManager
@@ -239,14 +239,23 @@ def session_analytics(
         {
             "speaker": message["speaker"],
             "role": message["role"],
-            "round": (index // active_role_count) + 1,
+            "round": message.get("phase_index") or (index // active_role_count) + 1,
             "model": message["model"],
             "content": message["content"],
+            "phase_key": message.get("phase_key"),
+            "phase_title": message.get("phase_title"),
+            "phase_index": message.get("phase_index"),
+            "phase_total": message.get("phase_total"),
+            "phase_kind": message.get("phase_kind"),
         }
         for index, message in enumerate(debater_source)
     ]
     topic = str(latest_debate.get("topic") or "")
     analysis = analyze_debate(topic, debater_messages)
+    analysis = debate_manager.phase_metadata_from_messages(analysis, debater_source, topic)
+    analysis["session_charts"] = session_chart_data(
+        debates, all_messages, latest_debate["id"]
+    )
     analysis["source"] = {
         "mode": "selected_debate" if debate_id else "latest_debate",
         "debate_id": latest_debate["id"],

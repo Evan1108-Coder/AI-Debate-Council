@@ -18,13 +18,14 @@ class RenameDebateRequest(BaseModel):
 
 
 class DebateStartRequest(BaseModel):
-    topic: str = Field(min_length=3, max_length=1000)
+    topic: str = Field(min_length=3, max_length=5500)
     model: str = Field(min_length=1, max_length=120)
 
 
 class SessionSettingsUpdate(BaseModel):
     overall_model: str | None = Field(default=None, max_length=120)
     debaters_per_team: int | None = Field(default=None, ge=1, le=4)
+    discussion_messages_per_team: int | None = Field(default=None, ge=1, le=4)
     judge_assistant_enabled: bool | None = None
     agent_settings: dict[str, dict] | None = None
     role_models: dict[str, str] | None = None
@@ -39,6 +40,7 @@ class SessionSettingsUpdate(BaseModel):
     show_money_cost: bool | None = None
     cost_currency: str | None = Field(default=None, max_length=3)
     show_model_costs: bool | None = None
+    show_every_message_cost_in_debate: bool | None = None
     context_window: int | None = Field(default=None, ge=0, le=6)
     debate_rounds: int | None = Field(default=None, ge=1, le=6)
     researcher_web_search: bool | None = None
@@ -70,5 +72,11 @@ class DebateMessage(BaseModel):
     model: str
     content: str
     cost_summary: dict | None = None
+    debate_cost_summary: dict | None = None
+    phase_key: str | None = None
+    phase_title: str | None = None
+    phase_index: int | None = None
+    phase_total: int | None = None
+    phase_kind: str | None = None
     sequence: int
     created_at: str

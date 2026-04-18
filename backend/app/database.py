@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import sqlite3
 from threading import RLock
@@ -15,6 +16,17 @@ from .costing import normalize_currency
 SESSION_COUNTER_KEY = "session_counter"
 DEFAULT_SESSION_PREFIX = "Debate Session #"
 DEFAULT_DEBATE_PREFIX = "Debate #"
+
+
+def _int_env(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+DEFAULT_DEBATE_ROUNDS = _int_env("DEBATE_ROUNDS", 2, 1, 6)
 AGENT_ROLE_KEYS = (
     "council_assistant",
     "lead_advocate",
@@ -44,7 +56,8 @@ DEFAULT_AGENT_SETTINGS = {
 }
 DEFAULT_SESSION_SETTINGS = {
     "overall_model": "",
-    "debaters_per_team": 3,
+    "debaters_per_team": 2,
+    "discussion_messages_per_team": 3,
     "judge_assistant_enabled": True,
     "agent_settings": DEFAULT_AGENT_SETTINGS,
     "role_models": DEFAULT_ROLE_MODELS,
@@ -59,8 +72,9 @@ DEFAULT_SESSION_SETTINGS = {
     "show_money_cost": True,
     "cost_currency": "USD",
     "show_model_costs": False,
+    "show_every_message_cost_in_debate": False,
     "context_window": 2,
-    "debate_rounds": 2,
+    "debate_rounds": DEFAULT_DEBATE_ROUNDS,
     "researcher_web_search": False,
     "fact_check_mode": False,
     "export_format": "Markdown",
@@ -80,14 +94,15 @@ def message_row_to_dict(row: sqlite3.Row | None) -> dict | None:
     if not row:
         return None
     payload = dict(row)
-    raw_summary = payload.get("cost_summary")
-    if raw_summary:
-        try:
-            payload["cost_summary"] = json.loads(raw_summary)
-        except json.JSONDecodeError:
-            payload["cost_summary"] = None
-    else:
-        payload["cost_summary"] = None
+    for key in ("cost_summary", "debate_cost_summary"):
+        raw_summary = payload.get(key)
+        if raw_summary:
+            try:
+                payload[key] = json.loads(raw_summary)
+            except json.JSONDecodeError:
+                payload[key] = None
+        else:
+            payload[key] = None
     return payload
 
 
@@ -137,7 +152,8 @@ class Database:
                 CREATE TABLE IF NOT EXISTS session_settings (
                     session_id TEXT PRIMARY KEY,
                     overall_model TEXT NOT NULL DEFAULT '',
-                    debaters_per_team INTEGER NOT NULL DEFAULT 3,
+                    debaters_per_team INTEGER NOT NULL DEFAULT 2,
+                    discussion_messages_per_team INTEGER NOT NULL DEFAULT 3,
                     judge_assistant_enabled INTEGER NOT NULL DEFAULT 1,
                     agent_settings TEXT NOT NULL DEFAULT '{}',
                     role_models TEXT NOT NULL,
@@ -152,6 +168,7 @@ class Database:
                     show_money_cost INTEGER NOT NULL DEFAULT 1,
                     cost_currency TEXT NOT NULL DEFAULT 'USD',
                     show_model_costs INTEGER NOT NULL DEFAULT 0,
+                    show_every_message_cost_in_debate INTEGER NOT NULL DEFAULT 0,
                     context_window INTEGER NOT NULL,
                     debate_rounds INTEGER NOT NULL,
                     researcher_web_search INTEGER NOT NULL,
@@ -187,6 +204,12 @@ class Database:
                     model TEXT NOT NULL,
                     content TEXT NOT NULL,
                     cost_summary TEXT,
+                    debate_cost_summary TEXT,
+                    phase_key TEXT,
+                    phase_title TEXT,
+                    phase_index INTEGER,
+                    phase_total INTEGER,
+                    phase_kind TEXT,
                     sequence INTEGER NOT NULL,
                     created_at TEXT NOT NULL,
                     hidden_at TEXT,
@@ -239,7 +262,11 @@ class Database:
             )
         if "debaters_per_team" not in columns:
             connection.execute(
-                "ALTER TABLE session_settings ADD COLUMN debaters_per_team INTEGER NOT NULL DEFAULT 3"
+                "ALTER TABLE session_settings ADD COLUMN debaters_per_team INTEGER NOT NULL DEFAULT 2"
+            )
+        if "discussion_messages_per_team" not in columns:
+            connection.execute(
+                "ALTER TABLE session_settings ADD COLUMN discussion_messages_per_team INTEGER NOT NULL DEFAULT 3"
             )
         if "judge_assistant_enabled" not in columns:
             connection.execute(
@@ -260,6 +287,10 @@ class Database:
         if "show_model_costs" not in columns:
             connection.execute(
                 "ALTER TABLE session_settings ADD COLUMN show_model_costs INTEGER NOT NULL DEFAULT 0"
+            )
+        if "show_every_message_cost_in_debate" not in columns:
+            connection.execute(
+                "ALTER TABLE session_settings ADD COLUMN show_every_message_cost_in_debate INTEGER NOT NULL DEFAULT 0"
             )
 
     def _ensure_history_schema(self, connection: sqlite3.Connection) -> None:
@@ -323,6 +354,18 @@ class Database:
             connection.execute("ALTER TABLE messages ADD COLUMN hidden_at TEXT")
         if "cost_summary" not in message_columns:
             connection.execute("ALTER TABLE messages ADD COLUMN cost_summary TEXT")
+        if "debate_cost_summary" not in message_columns:
+            connection.execute("ALTER TABLE messages ADD COLUMN debate_cost_summary TEXT")
+        if "phase_key" not in message_columns:
+            connection.execute("ALTER TABLE messages ADD COLUMN phase_key TEXT")
+        if "phase_title" not in message_columns:
+            connection.execute("ALTER TABLE messages ADD COLUMN phase_title TEXT")
+        if "phase_index" not in message_columns:
+            connection.execute("ALTER TABLE messages ADD COLUMN phase_index INTEGER")
+        if "phase_total" not in message_columns:
+            connection.execute("ALTER TABLE messages ADD COLUMN phase_total INTEGER")
+        if "phase_kind" not in message_columns:
+            connection.execute("ALTER TABLE messages ADD COLUMN phase_kind TEXT")
 
     def list_sessions(self) -> list[dict]:
         with self.lock, self.session() as connection:
@@ -393,6 +436,7 @@ class Database:
                 session_id,
                 overall_model,
                 debaters_per_team,
+                discussion_messages_per_team,
                 judge_assistant_enabled,
                 agent_settings,
                 role_models,
@@ -407,6 +451,7 @@ class Database:
                 show_money_cost,
                 cost_currency,
                 show_model_costs,
+                show_every_message_cost_in_debate,
                 context_window,
                 debate_rounds,
                 researcher_web_search,
@@ -415,12 +460,13 @@ class Database:
                 auto_save_interval,
                 updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 session_id,
                 DEFAULT_SESSION_SETTINGS["overall_model"],
                 DEFAULT_SESSION_SETTINGS["debaters_per_team"],
+                DEFAULT_SESSION_SETTINGS["discussion_messages_per_team"],
                 int(DEFAULT_SESSION_SETTINGS["judge_assistant_enabled"]),
                 json.dumps(DEFAULT_SESSION_SETTINGS["agent_settings"]),
                 json.dumps(DEFAULT_SESSION_SETTINGS["role_models"]),
@@ -435,6 +481,7 @@ class Database:
                 int(DEFAULT_SESSION_SETTINGS["show_money_cost"]),
                 DEFAULT_SESSION_SETTINGS["cost_currency"],
                 int(DEFAULT_SESSION_SETTINGS["show_model_costs"]),
+                int(DEFAULT_SESSION_SETTINGS["show_every_message_cost_in_debate"]),
                 DEFAULT_SESSION_SETTINGS["context_window"],
                 DEFAULT_SESSION_SETTINGS["debate_rounds"],
                 int(DEFAULT_SESSION_SETTINGS["researcher_web_search"]),
@@ -480,6 +527,7 @@ class Database:
                 UPDATE session_settings
                 SET overall_model = ?,
                     debaters_per_team = ?,
+                    discussion_messages_per_team = ?,
                     judge_assistant_enabled = ?,
                     agent_settings = ?,
                     role_models = ?,
@@ -494,6 +542,7 @@ class Database:
                     show_money_cost = ?,
                     cost_currency = ?,
                     show_model_costs = ?,
+                    show_every_message_cost_in_debate = ?,
                     context_window = ?,
                     debate_rounds = ?,
                     researcher_web_search = ?,
@@ -506,6 +555,7 @@ class Database:
                 (
                     next_settings["overall_model"],
                     next_settings["debaters_per_team"],
+                    next_settings["discussion_messages_per_team"],
                     int(next_settings["judge_assistant_enabled"]),
                     json.dumps(next_settings["agent_settings"]),
                     json.dumps(next_settings["role_models"]),
@@ -520,6 +570,7 @@ class Database:
                     int(next_settings["show_money_cost"]),
                     next_settings["cost_currency"],
                     int(next_settings["show_model_costs"]),
+                    int(next_settings["show_every_message_cost_in_debate"]),
                     next_settings["context_window"],
                     next_settings["debate_rounds"],
                     int(next_settings["researcher_web_search"]),
@@ -540,6 +591,7 @@ class Database:
                 "role_models": json.loads(row["role_models"] or "{}"),
                 "overall_model": row["overall_model"],
                 "debaters_per_team": row["debaters_per_team"],
+                "discussion_messages_per_team": row["discussion_messages_per_team"],
                 "judge_assistant_enabled": bool(row["judge_assistant_enabled"]),
                 "agent_settings": json.loads(row["agent_settings"] or "{}"),
                 "temperature": row["temperature"],
@@ -553,6 +605,7 @@ class Database:
                 "show_money_cost": bool(row["show_money_cost"]),
                 "cost_currency": row["cost_currency"],
                 "show_model_costs": bool(row["show_model_costs"]),
+                "show_every_message_cost_in_debate": bool(row["show_every_message_cost_in_debate"]),
                 "context_window": row["context_window"],
                 "debate_rounds": row["debate_rounds"],
                 "researcher_web_search": bool(row["researcher_web_search"]),
@@ -573,7 +626,8 @@ class Database:
         )
         return {
             "overall_model": str(merged.get("overall_model", "")).strip(),
-            "debaters_per_team": max(1, min(4, int(merged.get("debaters_per_team", 3)))),
+            "debaters_per_team": max(1, min(4, int(merged.get("debaters_per_team", 2)))),
+            "discussion_messages_per_team": max(1, min(4, int(merged.get("discussion_messages_per_team", 3)))),
             "judge_assistant_enabled": bool(merged.get("judge_assistant_enabled", True)),
             "agent_settings": agent_settings,
             "role_models": role_models,
@@ -588,6 +642,7 @@ class Database:
             "show_money_cost": bool(merged.get("show_money_cost", True)),
             "cost_currency": normalize_currency(str(merged.get("cost_currency", "USD"))),
             "show_model_costs": bool(merged.get("show_model_costs", False)),
+            "show_every_message_cost_in_debate": bool(merged.get("show_every_message_cost_in_debate", False)),
             "context_window": max(0, min(6, int(merged.get("context_window", 2)))),
             "debate_rounds": max(1, min(6, int(merged.get("debate_rounds", 2)))),
             "researcher_web_search": bool(merged.get("researcher_web_search", False)),
@@ -851,6 +906,8 @@ class Database:
         model: str,
         content: str,
         cost_summary: dict | None = None,
+        debate_cost_summary: dict | None = None,
+        phase: dict | None = None,
     ) -> dict:
         with self.lock, self.session() as connection:
             sequence = (
@@ -869,8 +926,8 @@ class Database:
             connection.execute(
                 """
                 INSERT INTO messages
-                    (id, session_id, debate_id, role, speaker, model, content, cost_summary, sequence, created_at, hidden_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                    (id, session_id, debate_id, role, speaker, model, content, cost_summary, debate_cost_summary, phase_key, phase_title, phase_index, phase_total, phase_kind, sequence, created_at, hidden_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
                 """,
                 (
                     message_id,
@@ -881,6 +938,12 @@ class Database:
                     model,
                     content,
                     json.dumps(cost_summary) if cost_summary else None,
+                    json.dumps(debate_cost_summary) if debate_cost_summary else None,
+                    phase.get("key") if isinstance(phase, dict) else None,
+                    phase.get("title") if isinstance(phase, dict) else None,
+                    phase.get("index") if isinstance(phase, dict) else None,
+                    phase.get("total") if isinstance(phase, dict) else None,
+                    phase.get("kind") if isinstance(phase, dict) else None,
                     sequence,
                     now,
                 ),

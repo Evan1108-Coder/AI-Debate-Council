@@ -17,7 +17,6 @@ class Settings:
     app_name = "AI Debate Council"
     max_sessions = 10
     max_active_debates = 3
-    debate_rounds = int(os.getenv("DEBATE_ROUNDS", "2"))
     request_timeout_seconds = int(os.getenv("LITELLM_TIMEOUT_SECONDS", "120"))
     mock_llm = os.getenv("MOCK_LLM_RESPONSES", "false").lower() == "true"
 
