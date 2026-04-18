@@ -373,6 +373,12 @@ Check:
    }
    ```
 
+### WebSocket Auto-Reconnect
+
+The frontend automatically retries the WebSocket connection up to 2 times (with a 1.2-second delay) if the initial connection fails before the server starts responding. You will see a status message like "Connection failed. Retrying (1/2)..." in the UI. If all retries fail, the error is displayed.
+
+On the backend side, `safe_send_json()` gracefully handles client disconnects so the server does not crash if you close the browser tab mid-debate.
+
 ### WebSocket Disconnects Mid-Debate
 
 This can happen if:

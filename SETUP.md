@@ -271,6 +271,7 @@ python3.13 -m unittest backend.tests.test_session_naming -v
 python3.13 -m unittest backend.tests.test_model_registry -v
 python3.13 -m unittest backend.tests.test_session_settings -v
 python3.13 -m unittest backend.tests.test_analytics -v
+python3.13 -m unittest backend.tests.test_costing -v
 python3.13 -m unittest backend.tests.test_debate_architecture -v
 ```
 
@@ -280,7 +281,7 @@ To pull the latest changes:
 
 ```bash
 cd AI-Debate-Council
-git pull origin main
+git pull origin master
 
 # Reinstall backend dependencies (in case requirements changed)
 source .venv/bin/activate   # macOS/Linux

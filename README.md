@@ -53,6 +53,28 @@ The backend is Python 3.13, FastAPI, SQLite, WebSockets, and LiteLLM. The fronte
 - **Visual charts**: Bayesian pie chart, role weight bars, stance vote bars, Bayesian trend line chart, and argument mining details.
 - **Per-debate statistics**: Switch between saved debates in the stats panel.
 
+### Cost Tracking
+
+- **Estimated API cost per debate**: The backend tracks token usage for every model call and estimates costs using built-in price tables for 20+ models.
+- **9 currencies**: USD, CNY, HKD, EUR, JPY, GBP, AUD, CAD, SGP. Currency is selectable per chat in Chat Settings.
+- **Per-message cost summary**: Each message stores a `cost_summary` with total cost, token counts, and per-model breakdowns.
+- **CostBox display**: When "Show Money Cost" is enabled in Chat Settings, a cost badge appears below each message showing the estimated cost in the selected currency. An optional per-model breakdown is available via "Show Model Costs".
+- **Token estimation**: A lightweight heuristic estimates tokens from text (with CJK-aware counting) without requiring a tokenizer library.
+
+### Runtime Diary
+
+- **Structured event log**: The backend maintains an in-memory diary (`runtime_diary.py`) that records events from both the backend and frontend, including WebSocket lifecycle, debate progress, errors, and custom entries.
+- **Automatic secret scrubbing**: API keys, tokens, and other secrets are automatically redacted before being stored, using pattern matching for common secret formats.
+- **Council Assistant context**: The Council Assistant includes recent diary entries in its prompt, giving it awareness of what happened during the session (errors, reconnections, etc.).
+- **Frontend logging**: The frontend posts events to `POST /api/runtime-diary` for actions like WebSocket open/close, errors, and session changes.
+- **Capped at 160 entries**: Older entries are automatically evicted to keep memory usage bounded.
+
+### WebSocket Reliability
+
+- **Auto-reconnect**: If the WebSocket connection fails before the server starts responding, the frontend automatically retries up to 2 times with a 1.2-second delay between attempts.
+- **Graceful disconnect handling**: The backend uses a `safe_send_json()` helper that catches `WebSocketDisconnect` and `RuntimeError` on closed connections, preventing server crashes when a client disconnects mid-debate.
+- **`ClientDisconnectedError`**: The debate engine raises this custom error when it detects a client disconnect, allowing the WebSocket handler to clean up gracefully instead of logging a traceback.
+
 ### Session Management
 
 - **Up to 10 chat sessions** at a time.
@@ -106,10 +128,13 @@ The backend is a single Python process. All state lives in SQLite. The active-de
 │   │   ├── model_registry.py    # MODEL_MAP, provider detection, SupportedModel
 │   │   ├── schemas.py           # Pydantic request/response models
 │   │   ├── config.py            # Settings from environment variables
-│   │   └── analytics.py         # 10-method debate analysis engine
+│   │   ├── analytics.py         # 10-method debate analysis engine
+│   │   ├── costing.py           # API cost estimation and currency conversion
+│   │   └── runtime_diary.py     # Event logging with automatic secret scrubbing
 │   ├── tests/
 │   │   ├── __init__.py
 │   │   ├── test_analytics.py
+│   │   ├── test_costing.py
 │   │   ├── test_debate_architecture.py
 │   │   ├── test_model_registry.py
 │   │   ├── test_session_naming.py
@@ -274,6 +299,9 @@ Each session stores its own settings. Changes take effect on the next turn — e
 | Auto-scroll | On | On/Off | Auto-scroll to latest message. |
 | Show timestamps | Off | On/Off | Show message timestamps. |
 | Show token count | Off | On/Off | Show estimated token counts. |
+| Show money cost | Off | On/Off | Display estimated API cost below each message. |
+| Cost currency | USD | USD, CNY, HKD, EUR, JPY, GBP, AUD, CAD, SGP | Currency for cost display. |
+| Show model costs | Off | On/Off | Show per-model cost breakdown in addition to the total. |
 | Fact-check mode | Off | On/Off | Flag uncertain claims (reserved for tool integration). |
 | Export format | Markdown | Markdown, PDF, JSON | Reserved for future export feature. |
 | Auto-save interval | 30 | 5–300 seconds | Reserved for future auto-save feature. |
@@ -336,6 +364,7 @@ Team role settings (Lead Advocate, Rebuttal Critic, etc.) apply to both the Pro 
 | `GET` | `/api/sessions/{session_id}/settings` | Get session settings. |
 | `PATCH` | `/api/sessions/{session_id}/settings` | Update session settings. Body: partial settings object. |
 | `GET` | `/api/sessions/{session_id}/analytics?debate_id=...` | Get analytics for a session's latest or specified debate. |
+| `POST` | `/api/runtime-diary` | Record a runtime diary entry. Body: `{"source": "...", "event": "...", "detail": "...", "session_id": "..."}`. |
 
 ### WebSocket
 
@@ -365,10 +394,10 @@ Send `{"type": "start_interaction", "topic": "...", "model": "model-name"}` to b
 | `interaction_started` | Chat mode started. Includes mode and selected model. |
 | `message_started` | A new message is about to stream. Includes speaker, role, model, round. |
 | `message_delta` | A token chunk for the current stream. |
-| `message_completed` | A message finished streaming. Includes the saved message record. |
+| `message_completed` | A message finished streaming. Includes the saved message record and `cost_summary`. |
 | `analysis_updated` | Analytics recalculated after a debater turn. |
 | `debate_completed` | Debate finished. Includes judge summary and active debate count. |
-| `interaction_completed` | Chat finished. |
+| `interaction_completed` | Chat finished. Includes `cost_summary`. |
 | `error` | An error occurred. Includes error message string. |
 
 ## Quick Start
@@ -401,7 +430,7 @@ Open `http://localhost:6001`.
 
 ## Running Tests
 
-The backend includes regression tests for session naming, model registry, session settings, analytics, and debate architecture.
+The backend includes regression tests for session naming, model registry, session settings, analytics, cost estimation, and debate architecture.
 
 ```bash
 # Run all tests
@@ -412,6 +441,7 @@ python3.13 -m unittest backend.tests.test_session_naming -v
 python3.13 -m unittest backend.tests.test_model_registry -v
 python3.13 -m unittest backend.tests.test_session_settings -v
 python3.13 -m unittest backend.tests.test_analytics -v
+python3.13 -m unittest backend.tests.test_costing -v
 python3.13 -m unittest backend.tests.test_debate_architecture -v
 ```
 
