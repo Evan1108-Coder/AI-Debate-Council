@@ -11,8 +11,10 @@ from .model_registry import available_model_payloads, available_models, provider
 from .runtime_diary import runtime_diary
 from .schemas import (
     ChatSession,
+    CouncilSettingsUpdate,
     DebateMessage,
     DebateRecord,
+    FeedbackRequest,
     RenameDebateRequest,
     RenameSessionRequest,
     SessionSettingsUpdate,
@@ -81,6 +83,29 @@ def models() -> dict:
         "selection_required": True,
         "mock_mode": settings.mock_llm,
     }
+
+
+@app.get("/api/council-settings")
+def get_council_settings() -> dict:
+    return db.get_council_settings()
+
+
+@app.patch("/api/council-settings")
+def update_council_settings(payload: CouncilSettingsUpdate) -> dict:
+    updates = payload.model_dump(exclude_unset=True, exclude_none=True)
+    return db.update_council_settings(updates)
+
+
+@app.post("/api/council-settings/reset-agent-experience")
+def reset_universal_agent_experience(payload: dict) -> dict:
+    phrase = str(payload.get("confirmation") or "").strip()
+    if phrase != "RESET COUNCIL IDENTITIES":
+        raise HTTPException(
+            status_code=422,
+            detail='Type RESET COUNCIL IDENTITIES to reset universal agent identities.',
+        )
+    deleted = db.reset_agent_experience(scope="universal")
+    return {"deleted": deleted}
 
 
 @app.post("/api/runtime-diary")
@@ -265,6 +290,92 @@ def session_analytics(
         "debate_count": len(debates),
     }
     return analysis
+
+
+@app.get("/api/sessions/{session_id}/intelligence")
+def session_intelligence(
+    session_id: str, debate_id: str | None = Query(default=None, alias="debate_id")
+) -> dict:
+    if not db.get_session(session_id):
+        raise HTTPException(status_code=404, detail="Session not found.")
+    debates = db.list_debates(session_id)
+    selected_debate = None
+    if debate_id:
+        selected_debate = db.get_debate(session_id, debate_id)
+        if not selected_debate:
+            raise HTTPException(status_code=404, detail="Debate not found.")
+    elif debates:
+        selected_debate = debates[0]
+
+    records = []
+    experiences = []
+    if selected_debate:
+        records = db.list_intelligence_records(session_id, selected_debate["id"])
+    council_settings = db.get_council_settings()
+    experiences = db.list_agent_experience(
+        session_id=session_id,
+        include_universal=bool(council_settings.get("universal_experience", True)),
+        limit=80,
+    )
+    by_type: dict[str, list[dict]] = {}
+    for record in records:
+        by_type.setdefault(record["record_type"], []).append(record)
+    team_rooms = {
+        "pro": [record for record in records if record.get("team") == "pro"],
+        "con": [record for record in records if record.get("team") == "con"],
+    }
+    return {
+        "debate": selected_debate,
+        "records": records,
+        "claims": by_type.get("claim", []),
+        "challenges": by_type.get("challenge", []),
+        "evidence": by_type.get("evidence", []),
+        "scorecards": by_type.get("judge_scorecard", []),
+        "values": by_type.get("value_record", []),
+        "memories": by_type.get("memory_saved", []),
+        "reviews": by_type.get("post_debate_review", []),
+        "team_rooms": team_rooms,
+        "experiences": experiences,
+        "feedback_questions": [
+            {
+                "key": "judge_missed",
+                "question": "Did the Judge miss an important argument?",
+                "options": ["No", "Yes, from Pro", "Yes, from Con", "Other..."],
+            },
+            {
+                "key": "strongest_contribution",
+                "question": "Which contribution most improved the debate?",
+                "options": ["Pro argument", "Con argument", "Research/evidence", "Cross-exam/challenge", "Other..."],
+            },
+            {
+                "key": "weakest_point",
+                "question": "What should the council avoid or improve next time?",
+                "options": ["Unsupported claim", "Weak evidence", "Ignored challenge", "Unclear verdict", "Other..."],
+            },
+        ] if selected_debate else [],
+    }
+
+
+@app.post("/api/sessions/{session_id}/debates/{debate_id}/feedback")
+def add_debate_feedback(session_id: str, debate_id: str, payload: FeedbackRequest) -> dict:
+    if not db.get_debate(session_id, debate_id):
+        raise HTTPException(status_code=404, detail="Debate not found.")
+    saved = db.add_post_debate_feedback(
+        session_id=session_id,
+        debate_id=debate_id,
+        question_key=payload.question_key,
+        answer=payload.answer,
+    )
+    db.add_agent_experience(
+        scope="chat",
+        session_id=session_id,
+        agent_id="council",
+        lesson_type="user_feedback",
+        lesson=f"User feedback for {payload.question_key}: {payload.answer}",
+        confidence="medium",
+        basis=[{"debate_id": debate_id, "feedback_id": saved["id"]}],
+    )
+    return saved
 
 
 @app.websocket("/ws/debates/{session_id}")

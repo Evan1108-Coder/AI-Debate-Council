@@ -10,21 +10,28 @@ import {
   createSession,
   deleteDebateStatistics,
   deleteSession,
+  getCouncilSettings,
   getModels,
   getSessionAnalytics,
+  getSessionIntelligence,
   getSessionSettings,
   listDebates,
   listMessages,
   listSessions,
   recordRuntimeDiary,
   renameDebate,
+  resetUniversalAgentExperience,
   renameSession,
+  submitDebateFeedback,
+  updateCouncilSettings,
   updateSessionSettings,
   WS_BASE
 } from "@/lib/api";
 import type {
   ChatSession,
+  CouncilSettings,
   DebateAnalytics,
+  DebateIntelligence,
   DebateAssignment,
   DebateEvent,
   DebateMessage,
@@ -59,11 +66,15 @@ export default function Home() {
     {}
   );
   const [analyticsBySession, setAnalyticsBySession] = useState<Record<string, DebateAnalytics>>({});
+  const [intelligenceBySession, setIntelligenceBySession] = useState<Record<string, DebateIntelligence>>({});
   const [analyticsHistoryBySession, setAnalyticsHistoryBySession] = useState<
     Record<string, DebateAnalytics[]>
   >({});
   const [runningBySession, setRunningBySession] = useState<Record<string, boolean>>({});
+  const [teamPreparingBySession, setTeamPreparingBySession] = useState<Record<string, boolean>>({});
   const [models, setModels] = useState<ModelsResponse | null>(null);
+  const [councilSettings, setCouncilSettings] = useState<CouncilSettings | null>(null);
+  const [showCouncilSettings, setShowCouncilSettings] = useState(false);
   const [activePanel, setActivePanel] = useState<RoomPanel>("chat");
   const [error, setError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ChatSession | null>(null);
@@ -95,8 +106,10 @@ export default function Home() {
   const selectedDebates = selectedId ? debatesBySession[selectedId] ?? [] : [];
   const selectedDebateId = selectedId ? selectedDebateBySession[selectedId] ?? "" : "";
   const selectedAnalytics = selectedId ? analyticsBySession[selectedId] ?? null : null;
+  const selectedIntelligence = selectedId ? intelligenceBySession[selectedId] ?? null : null;
   const selectedAnalyticsHistory = selectedId ? analyticsHistoryBySession[selectedId] ?? [] : [];
   const selectedRunning = selectedId ? Boolean(runningBySession[selectedId]) : false;
+  const selectedTeamPreparing = selectedId ? Boolean(teamPreparingBySession[selectedId]) : false;
 
   const refreshSessions = useCallback(async () => {
     const nextSessions = await listSessions();
@@ -150,16 +163,26 @@ export default function Home() {
     }));
   }, []);
 
+  const refreshIntelligence = useCallback(async (sessionId: string, debateId?: string) => {
+    const nextIntelligence = await getSessionIntelligence(sessionId, debateId);
+    setIntelligenceBySession((current) => ({ ...current, [sessionId]: nextIntelligence }));
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
     async function boot() {
       try {
-        const [sessionList, modelData] = await Promise.all([listSessions(), getModels()]);
+        const [sessionList, modelData, councilData] = await Promise.all([
+          listSessions(),
+          getModels(),
+          getCouncilSettings()
+        ]);
         if (cancelled) {
           return;
         }
         setModels(modelData);
+        setCouncilSettings(councilData);
 
         setSessions(sessionList);
         setSelectedId(sessionList[0]?.id ?? null);
@@ -202,7 +225,8 @@ export default function Home() {
     });
     refreshDebates(selectedId).catch(() => undefined);
     refreshAnalytics(selectedId).catch(() => undefined);
-  }, [selectedId, refreshMessages, refreshSettings, refreshDebates, refreshAnalytics]);
+    refreshIntelligence(selectedId).catch(() => undefined);
+  }, [selectedId, refreshMessages, refreshSettings, refreshDebates, refreshAnalytics, refreshIntelligence]);
 
   useEffect(() => {
     if (!models || !selectedId) {
@@ -233,6 +257,7 @@ export default function Home() {
 
   function handleSelect(id: string) {
     setSelectedId(id);
+    setShowCouncilSettings(false);
     setError(null);
   }
 
@@ -297,7 +322,9 @@ export default function Home() {
       setSelectedDebateBySession((current) => removeKey(current, target.id));
       setAnalyticsBySession((current) => removeKey(current, target.id));
       setAnalyticsHistoryBySession((current) => removeKey(current, target.id));
+      setIntelligenceBySession((current) => removeKey(current, target.id));
       setRunningBySession((current) => removeKey(current, target.id));
+      setTeamPreparingBySession((current) => removeKey(current, target.id));
       if (selectedId === target.id) {
         setSelectedId(nextSessions[0]?.id ?? null);
       }
@@ -334,6 +361,7 @@ export default function Home() {
       setSelectedDebateBySession((current) => ({ ...current, [session.id]: "" }));
       setAnalyticsBySession((current) => removeKey(current, session.id));
       setAnalyticsHistoryBySession((current) => ({ ...current, [session.id]: [] }));
+      setIntelligenceBySession((current) => removeKey(current, session.id));
       setStatusBySession((current) => ({
         ...current,
         [session.id]:
@@ -366,6 +394,7 @@ export default function Home() {
     setAnalyticsHistoryBySession((current) => ({ ...current, [sessionId]: [] }));
     try {
       await refreshAnalytics(sessionId, debateId || undefined);
+      await refreshIntelligence(sessionId, debateId || undefined);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : "Could not load debate statistics.");
     }
@@ -417,8 +446,10 @@ export default function Home() {
       setAnalyticsHistoryBySession((current) => ({ ...current, [session.id]: [] }));
       if (nextSelected) {
         await refreshAnalytics(session.id, nextSelected);
+        await refreshIntelligence(session.id, nextSelected);
       } else {
         setAnalyticsBySession((current) => removeKey(current, session.id));
+        setIntelligenceBySession((current) => removeKey(current, session.id));
       }
       setDeleteDebateTarget(null);
       refreshSessions().catch(() => undefined);
@@ -451,6 +482,37 @@ export default function Home() {
       setError(exc instanceof Error ? exc.message : "Could not save settings.");
       refreshSettings(sessionId).catch(() => undefined);
     }
+  }
+
+  async function handleUpdateCouncilSettings(updates: Partial<CouncilSettings>) {
+    setCouncilSettings((current) => (current ? { ...current, ...updates } : current));
+    try {
+      const saved = await updateCouncilSettings(updates);
+      setCouncilSettings(saved);
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "Could not save Council Settings.");
+      getCouncilSettings().then(setCouncilSettings).catch(() => undefined);
+    }
+  }
+
+  async function handleResetUniversalIdentities(confirmation: string) {
+    const result = await resetUniversalAgentExperience(confirmation);
+    if (selectedId) {
+      await refreshIntelligence(selectedId, selectedDebateBySession[selectedId] || undefined);
+    }
+    return result;
+  }
+
+  async function handleSubmitFeedback(questionKey: string, answer: string) {
+    if (!selectedId) {
+      return;
+    }
+    const debateId = selectedDebateBySession[selectedId];
+    if (!debateId || !answer.trim()) {
+      return;
+    }
+    await submitDebateFeedback(selectedId, debateId, questionKey, answer.trim());
+    await refreshIntelligence(selectedId, debateId);
   }
 
   function handleDraftChange(value: string) {
@@ -568,6 +630,7 @@ export default function Home() {
       refreshMessages(sessionId).catch(() => undefined);
       refreshDebates(sessionId).catch(() => undefined);
       refreshAnalytics(sessionId).catch(() => undefined);
+      refreshIntelligence(sessionId).catch(() => undefined);
     };
   }
 
@@ -615,6 +678,19 @@ export default function Home() {
           ? `${event.positions.pro} ${event.positions.con}`
           : `Pro argues that this position is correct: ${event.topic}. Con argues that this position is wrong or too weak: ${event.topic}.`
       }));
+      return;
+    }
+
+    if (event.type === "team_preparation_started") {
+      setTeamPreparingBySession((current) => ({ ...current, [sessionId]: true }));
+      setStatusBySession((current) => ({ ...current, [sessionId]: event.message }));
+      return;
+    }
+
+    if (event.type === "team_preparation_completed") {
+      setTeamPreparingBySession((current) => ({ ...current, [sessionId]: false }));
+      setStatusBySession((current) => ({ ...current, [sessionId]: event.message }));
+      refreshIntelligence(sessionId, event.debate_id).catch(() => undefined);
       return;
     }
 
@@ -702,6 +778,7 @@ export default function Home() {
         ...current,
         [sessionId]: mergeAnalyticsHistory(current[sessionId] ?? [], event.analysis)
       }));
+      refreshIntelligence(sessionId, event.analysis.source?.debate_id).catch(() => undefined);
       return;
     }
 
@@ -716,6 +793,7 @@ export default function Home() {
       refreshMessages(sessionId).catch(() => undefined);
       refreshDebates(sessionId).catch(() => undefined);
       refreshAnalytics(sessionId).catch(() => undefined);
+      refreshIntelligence(sessionId).catch(() => undefined);
       return;
     }
 
@@ -735,6 +813,11 @@ export default function Home() {
         maxSessions={MAX_SESSIONS}
         onNew={handleNewSession}
         onSelect={handleSelect}
+        onCouncilSettings={() => {
+          setShowCouncilSettings(true);
+          setError(null);
+        }}
+        councilSettingsActive={showCouncilSettings}
       />
       <DebateRoom
         selectedSession={selectedSession}
@@ -749,6 +832,10 @@ export default function Home() {
         selectedDebateId={selectedDebateId}
         analytics={selectedAnalytics}
         analyticsHistory={selectedAnalyticsHistory}
+        intelligence={selectedIntelligence}
+        isTeamPreparing={selectedTeamPreparing}
+        showCouncilSettings={showCouncilSettings}
+        councilSettings={councilSettings}
         settings={selectedSettings}
         isRunning={selectedRunning}
         selectedModelName={selectedModelName}
@@ -760,6 +847,9 @@ export default function Home() {
         onDebateChange={handleDebateChange}
         onSend={handleSend}
         onSettingsChange={handleUpdateSettings}
+        onCouncilSettingsChange={handleUpdateCouncilSettings}
+        onResetUniversalIdentities={handleResetUniversalIdentities}
+        onFeedbackSubmit={handleSubmitFeedback}
         onRename={handleRename}
         onRenameDebate={handleRenameDebate}
         onDeleteRequest={(session) => {

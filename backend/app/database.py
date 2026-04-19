@@ -16,6 +16,18 @@ from .costing import normalize_currency
 SESSION_COUNTER_KEY = "session_counter"
 DEFAULT_SESSION_PREFIX = "Debate Session #"
 DEFAULT_DEBATE_PREFIX = "Debate #"
+COUNCIL_SETTINGS_KEY = "council_settings"
+DEFAULT_COUNCIL_SETTINGS = {
+    "universal_experience": True,
+    "use_agent_identity_profiles": True,
+    "debate_intelligence_depth": "Normal",
+    "use_value_consequence_system": True,
+    "default_judge_mode": "Hybrid",
+}
+COUNCIL_SETTING_CHOICES = {
+    "debate_intelligence_depth": {"Light", "Normal", "Deep"},
+    "default_judge_mode": {"Debate Performance", "Truth-Seeking", "Hybrid"},
+}
 
 
 def _int_env(name: str, default: int, minimum: int, maximum: int) -> int:
@@ -79,6 +91,9 @@ DEFAULT_SESSION_SETTINGS = {
     "fact_check_mode": False,
     "export_format": "Markdown",
     "auto_save_interval": 30,
+    "use_experience": True,
+    "judge_mode": "Hybrid",
+    "evidence_strictness": "Normal",
 }
 
 
@@ -175,6 +190,9 @@ class Database:
                     fact_check_mode INTEGER NOT NULL,
                     export_format TEXT NOT NULL,
                     auto_save_interval INTEGER NOT NULL,
+                    use_experience INTEGER NOT NULL DEFAULT 1,
+                    judge_mode TEXT NOT NULL DEFAULT 'Hybrid',
+                    evidence_strictness TEXT NOT NULL DEFAULT 'Normal',
                     updated_at TEXT NOT NULL,
                     FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
                 );
@@ -219,8 +237,60 @@ class Database:
 
                 CREATE INDEX IF NOT EXISTS idx_messages_session_sequence
                     ON messages(session_id, sequence);
+                CREATE TABLE IF NOT EXISTS debate_intelligence (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    debate_id TEXT NOT NULL,
+                    record_type TEXT NOT NULL,
+                    team TEXT NOT NULL DEFAULT '',
+                    role TEXT NOT NULL DEFAULT '',
+                    agent_id TEXT NOT NULL DEFAULT '',
+                    title TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT '',
+                    confidence REAL NOT NULL DEFAULT 0,
+                    payload TEXT NOT NULL DEFAULT '{}',
+                    basis TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    hidden_at TEXT,
+                    FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+                    FOREIGN KEY(debate_id) REFERENCES debates(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS agent_experience (
+                    id TEXT PRIMARY KEY,
+                    scope TEXT NOT NULL,
+                    session_id TEXT,
+                    agent_id TEXT NOT NULL,
+                    lesson_type TEXT NOT NULL,
+                    lesson TEXT NOT NULL,
+                    confidence TEXT NOT NULL DEFAULT 'low',
+                    basis TEXT NOT NULL DEFAULT '[]',
+                    created_at TEXT NOT NULL,
+                    last_used_at TEXT,
+                    use_count INTEGER NOT NULL DEFAULT 0,
+                    hidden_at TEXT,
+                    FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE IF NOT EXISTS post_debate_feedback (
+                    id TEXT PRIMARY KEY,
+                    session_id TEXT NOT NULL,
+                    debate_id TEXT NOT NULL,
+                    question_key TEXT NOT NULL,
+                    answer TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+                    FOREIGN KEY(debate_id) REFERENCES debates(id) ON DELETE CASCADE
+                );
+
                 CREATE INDEX IF NOT EXISTS idx_debates_session_started
                     ON debates(session_id, started_at);
+                CREATE INDEX IF NOT EXISTS idx_intelligence_debate
+                    ON debate_intelligence(session_id, debate_id, record_type);
+                CREATE INDEX IF NOT EXISTS idx_experience_agent
+                    ON agent_experience(scope, session_id, agent_id);
                 """
             )
             connection.execute(
@@ -229,6 +299,13 @@ class Database:
                 VALUES (?, '0')
                 """,
                 (SESSION_COUNTER_KEY,),
+            )
+            connection.execute(
+                """
+                INSERT OR IGNORE INTO app_metadata (key, value)
+                VALUES (?, ?)
+                """,
+                (COUNCIL_SETTINGS_KEY, json.dumps(DEFAULT_COUNCIL_SETTINGS)),
             )
             connection.execute(
                 """
@@ -291,6 +368,18 @@ class Database:
         if "show_every_message_cost_in_debate" not in columns:
             connection.execute(
                 "ALTER TABLE session_settings ADD COLUMN show_every_message_cost_in_debate INTEGER NOT NULL DEFAULT 0"
+            )
+        if "use_experience" not in columns:
+            connection.execute(
+                "ALTER TABLE session_settings ADD COLUMN use_experience INTEGER NOT NULL DEFAULT 1"
+            )
+        if "judge_mode" not in columns:
+            connection.execute(
+                "ALTER TABLE session_settings ADD COLUMN judge_mode TEXT NOT NULL DEFAULT 'Hybrid'"
+            )
+        if "evidence_strictness" not in columns:
+            connection.execute(
+                "ALTER TABLE session_settings ADD COLUMN evidence_strictness TEXT NOT NULL DEFAULT 'Normal'"
             )
 
     def _ensure_history_schema(self, connection: sqlite3.Connection) -> None:
@@ -367,6 +456,87 @@ class Database:
         if "phase_kind" not in message_columns:
             connection.execute("ALTER TABLE messages ADD COLUMN phase_kind TEXT")
 
+
+    def _json_payload(self, value: object, default: object) -> object:
+        if value in (None, ""):
+            return default
+        if isinstance(value, (dict, list)):
+            return value
+        try:
+            return json.loads(str(value))
+        except (TypeError, json.JSONDecodeError):
+            return default
+
+    def _intelligence_row_to_dict(self, row: sqlite3.Row | None) -> dict | None:
+        if not row:
+            return None
+        payload = dict(row)
+        payload["payload"] = self._json_payload(payload.get("payload"), {})
+        payload["basis"] = self._json_payload(payload.get("basis"), [])
+        return payload
+
+    def _experience_row_to_dict(self, row: sqlite3.Row | None) -> dict | None:
+        if not row:
+            return None
+        payload = dict(row)
+        payload["basis"] = self._json_payload(payload.get("basis"), [])
+        return payload
+
+    def _council_settings_from_connection(self, connection: sqlite3.Connection) -> dict:
+        row = connection.execute(
+            "SELECT value FROM app_metadata WHERE key = ?", (COUNCIL_SETTINGS_KEY,)
+        ).fetchone()
+        if not row:
+            return DEFAULT_COUNCIL_SETTINGS.copy()
+        return self._normalize_council_settings(self._json_payload(row["value"], {}))
+
+    def get_council_settings(self) -> dict:
+        with self.lock, self.session() as connection:
+            row = connection.execute(
+                "SELECT value FROM app_metadata WHERE key = ?", (COUNCIL_SETTINGS_KEY,)
+            ).fetchone()
+            raw = json.loads(row["value"] or "{}") if row else {}
+            return self._normalize_council_settings(raw)
+
+    def update_council_settings(self, updates: dict) -> dict:
+        allowed = set(DEFAULT_COUNCIL_SETTINGS)
+        cleaned = {key: value for key, value in updates.items() if key in allowed}
+        with self.lock, self.session() as connection:
+            row = connection.execute(
+                "SELECT value FROM app_metadata WHERE key = ?", (COUNCIL_SETTINGS_KEY,)
+            ).fetchone()
+            current = json.loads(row["value"] or "{}") if row else {}
+            next_settings = self._normalize_council_settings({**current, **cleaned})
+            connection.execute(
+                """
+                INSERT INTO app_metadata (key, value)
+                VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (COUNCIL_SETTINGS_KEY, json.dumps(next_settings)),
+            )
+            return next_settings
+
+    def _normalize_council_settings(self, payload: dict) -> dict:
+        merged = {**DEFAULT_COUNCIL_SETTINGS, **(payload or {})}
+        return {
+            "universal_experience": bool(merged.get("universal_experience", True)),
+            "use_agent_identity_profiles": bool(merged.get("use_agent_identity_profiles", True)),
+            "debate_intelligence_depth": self._normalize_choice(
+                merged.get("debate_intelligence_depth", "Normal"),
+                COUNCIL_SETTING_CHOICES["debate_intelligence_depth"],
+                "Normal",
+            ),
+            "use_value_consequence_system": bool(
+                merged.get("use_value_consequence_system", True)
+            ),
+            "default_judge_mode": self._normalize_choice(
+                merged.get("default_judge_mode", "Hybrid"),
+                COUNCIL_SETTING_CHOICES["default_judge_mode"],
+                "Hybrid",
+            ),
+        }
+
     def list_sessions(self) -> list[dict]:
         with self.lock, self.session() as connection:
             rows = connection.execute(
@@ -430,6 +600,7 @@ class Database:
 
     def _ensure_settings(self, connection: sqlite3.Connection, session_id: str) -> None:
         now = utc_now()
+        council_defaults = self._council_settings_from_connection(connection)
         connection.execute(
             """
             INSERT OR IGNORE INTO session_settings (
@@ -458,9 +629,12 @@ class Database:
                 fact_check_mode,
                 export_format,
                 auto_save_interval,
+                use_experience,
+                judge_mode,
+                evidence_strictness,
                 updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 session_id,
@@ -488,6 +662,9 @@ class Database:
                 int(DEFAULT_SESSION_SETTINGS["fact_check_mode"]),
                 DEFAULT_SESSION_SETTINGS["export_format"],
                 DEFAULT_SESSION_SETTINGS["auto_save_interval"],
+                int(DEFAULT_SESSION_SETTINGS["use_experience"]),
+                council_defaults["default_judge_mode"],
+                DEFAULT_SESSION_SETTINGS["evidence_strictness"],
                 now,
             ),
         )
@@ -549,6 +726,9 @@ class Database:
                     fact_check_mode = ?,
                     export_format = ?,
                     auto_save_interval = ?,
+                    use_experience = ?,
+                    judge_mode = ?,
+                    evidence_strictness = ?,
                     updated_at = ?
                 WHERE session_id = ?
                 """,
@@ -577,6 +757,9 @@ class Database:
                     int(next_settings["fact_check_mode"]),
                     next_settings["export_format"],
                     next_settings["auto_save_interval"],
+                    int(next_settings["use_experience"]),
+                    next_settings["judge_mode"],
+                    next_settings["evidence_strictness"],
                     utc_now(),
                     session_id,
                 ),
@@ -612,6 +795,9 @@ class Database:
                 "fact_check_mode": bool(row["fact_check_mode"]),
                 "export_format": row["export_format"],
                 "auto_save_interval": row["auto_save_interval"],
+                "use_experience": bool(row["use_experience"]),
+                "judge_mode": row["judge_mode"],
+                "evidence_strictness": row["evidence_strictness"],
                 "updated_at": row["updated_at"],
             }
         )
@@ -649,6 +835,17 @@ class Database:
             "fact_check_mode": bool(merged.get("fact_check_mode", False)),
             "export_format": str(merged.get("export_format", "Markdown")),
             "auto_save_interval": max(5, min(300, int(merged.get("auto_save_interval", 30)))),
+            "use_experience": bool(merged.get("use_experience", True)),
+            "judge_mode": self._normalize_choice(
+                merged.get("judge_mode", "Hybrid"),
+                {"Debate Performance", "Truth-Seeking", "Hybrid"},
+                "Hybrid",
+            ),
+            "evidence_strictness": self._normalize_choice(
+                merged.get("evidence_strictness", "Normal"),
+                {"Relaxed", "Normal", "Strict"},
+                "Normal",
+            ),
             "updated_at": str(merged.get("updated_at", utc_now())),
         }
 
@@ -668,8 +865,18 @@ class Database:
             model = raw_model or role_models.get(role, "")
             normalized[role] = {
                 "model": model,
-                "temperature": max(0.0, min(1.0, float(raw.get("temperature", merged.get("temperature", base["temperature"]))))),
-                "max_tokens": max(120, min(2000, int(raw.get("max_tokens", merged.get("max_tokens", base["max_tokens"]))))),
+                "temperature": self._bounded_float(
+                    raw.get("temperature", merged.get("temperature", base["temperature"])),
+                    base["temperature"],
+                    0.0,
+                    1.0,
+                ),
+                "max_tokens": self._bounded_int(
+                    raw.get("max_tokens", merged.get("max_tokens", base["max_tokens"])),
+                    base["max_tokens"],
+                    120,
+                    2000,
+                ),
                 "response_length": self._normalize_choice(
                     raw.get("response_length", merged.get("response_length", base["response_length"])),
                     {"Concise", "Normal", "Detailed"},
@@ -679,6 +886,20 @@ class Database:
                 "always_on": bool(raw.get("always_on", base["always_on"])),
             }
         return normalized
+
+    def _bounded_int(self, value: object, default: int, minimum: int, maximum: int) -> int:
+        try:
+            parsed = int(float(str(value).strip()))
+        except (TypeError, ValueError):
+            parsed = default
+        return max(minimum, min(maximum, parsed))
+
+    def _bounded_float(self, value: object, default: float, minimum: float, maximum: float) -> float:
+        try:
+            parsed = float(str(value).strip())
+        except (TypeError, ValueError):
+            parsed = default
+        return max(minimum, min(maximum, parsed))
 
     def _normalize_role_models(self, role_models: dict) -> dict:
         normalized = {role: "" for role in AGENT_ROLE_KEYS}
@@ -971,6 +1192,202 @@ class Database:
             ).fetchall()
             return [message_row_to_dict(row) or {} for row in rows]
 
+
+    def add_intelligence_record(
+        self,
+        *,
+        session_id: str,
+        debate_id: str,
+        record_type: str,
+        title: str,
+        content: str,
+        team: str = "",
+        role: str = "",
+        agent_id: str = "",
+        status: str = "",
+        confidence: float = 0.0,
+        payload: dict | None = None,
+        basis: list | None = None,
+    ) -> dict:
+        with self.lock, self.session() as connection:
+            now = utc_now()
+            record_id = str(uuid4())
+            connection.execute(
+                """
+                INSERT INTO debate_intelligence
+                    (id, session_id, debate_id, record_type, team, role, agent_id, title, content, status, confidence, payload, basis, created_at, updated_at, hidden_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)
+                """,
+                (
+                    record_id,
+                    session_id,
+                    debate_id,
+                    record_type,
+                    team,
+                    role,
+                    agent_id,
+                    title[:160],
+                    content[:4000],
+                    status[:80],
+                    max(0.0, min(1.0, float(confidence))),
+                    json.dumps(payload or {}),
+                    json.dumps(basis or []),
+                    now,
+                    now,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM debate_intelligence WHERE id = ?", (record_id,)
+            ).fetchone()
+            return self._intelligence_row_to_dict(row) or {}
+
+    def list_intelligence_records(self, session_id: str, debate_id: str | None = None) -> list[dict]:
+        with self.lock, self.session() as connection:
+            if debate_id:
+                rows = connection.execute(
+                    """
+                    SELECT *
+                    FROM debate_intelligence
+                    WHERE session_id = ?
+                      AND debate_id = ?
+                      AND hidden_at IS NULL
+                    ORDER BY created_at ASC
+                    """,
+                    (session_id, debate_id),
+                ).fetchall()
+            else:
+                rows = connection.execute(
+                    """
+                    SELECT *
+                    FROM debate_intelligence
+                    WHERE session_id = ?
+                      AND hidden_at IS NULL
+                    ORDER BY created_at ASC
+                    """,
+                    (session_id,),
+                ).fetchall()
+            return [self._intelligence_row_to_dict(row) or {} for row in rows]
+
+    def add_agent_experience(
+        self,
+        *,
+        scope: str,
+        agent_id: str,
+        lesson_type: str,
+        lesson: str,
+        session_id: str | None = None,
+        confidence: str = "low",
+        basis: list | None = None,
+    ) -> dict:
+        cleaned_scope = "chat" if scope == "chat" else "universal"
+        cleaned_confidence = confidence if confidence in {"low", "medium", "high"} else "low"
+        with self.lock, self.session() as connection:
+            now = utc_now()
+            record_id = str(uuid4())
+            connection.execute(
+                """
+                INSERT INTO agent_experience
+                    (id, scope, session_id, agent_id, lesson_type, lesson, confidence, basis, created_at, last_used_at, use_count, hidden_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, 0, NULL)
+                """,
+                (
+                    record_id,
+                    cleaned_scope,
+                    session_id if cleaned_scope == "chat" else None,
+                    agent_id,
+                    lesson_type[:80],
+                    lesson[:1200],
+                    cleaned_confidence,
+                    json.dumps(basis or []),
+                    now,
+                ),
+            )
+            row = connection.execute(
+                "SELECT * FROM agent_experience WHERE id = ?", (record_id,)
+            ).fetchone()
+            return self._experience_row_to_dict(row) or {}
+
+    def list_agent_experience(
+        self,
+        *,
+        agent_id: str | None = None,
+        session_id: str | None = None,
+        include_universal: bool = True,
+        limit: int = 20,
+    ) -> list[dict]:
+        clauses = ["hidden_at IS NULL"]
+        params: list[object] = []
+        if agent_id:
+            clauses.append("agent_id = ?")
+            params.append(agent_id)
+        scope_clauses = []
+        if include_universal:
+            scope_clauses.append("scope = 'universal'")
+        if session_id:
+            scope_clauses.append("(scope = 'chat' AND session_id = ?)")
+            params.append(session_id)
+        if scope_clauses:
+            clauses.append("(" + " OR ".join(scope_clauses) + ")")
+        query = f"""
+            SELECT *
+            FROM agent_experience
+            WHERE {' AND '.join(clauses)}
+            ORDER BY created_at DESC
+            LIMIT ?
+        """
+        params.append(max(1, min(200, int(limit))))
+        with self.lock, self.session() as connection:
+            rows = connection.execute(query, tuple(params)).fetchall()
+            return [self._experience_row_to_dict(row) or {} for row in rows]
+
+    def reset_agent_experience(
+        self,
+        *,
+        scope: str = "universal",
+        session_id: str | None = None,
+        agent_id: str | None = None,
+    ) -> int:
+        clauses = ["hidden_at IS NULL"]
+        params: list[object] = [utc_now()]
+        if scope == "chat":
+            clauses.append("scope = 'chat'")
+            if session_id:
+                clauses.append("session_id = ?")
+                params.append(session_id)
+        else:
+            clauses.append("scope = 'universal'")
+        if agent_id:
+            clauses.append("agent_id = ?")
+            params.append(agent_id)
+        with self.lock, self.session() as connection:
+            cursor = connection.execute(
+                f"UPDATE agent_experience SET hidden_at = ? WHERE {' AND '.join(clauses)}",
+                tuple(params),
+            )
+            return cursor.rowcount
+
+    def add_post_debate_feedback(
+        self, *, session_id: str, debate_id: str, question_key: str, answer: str
+    ) -> dict:
+        with self.lock, self.session() as connection:
+            now = utc_now()
+            record_id = str(uuid4())
+            connection.execute(
+                """
+                INSERT INTO post_debate_feedback (id, session_id, debate_id, question_key, answer, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (record_id, session_id, debate_id, question_key[:80], answer[:1200], now),
+            )
+            return {
+                "id": record_id,
+                "session_id": session_id,
+                "debate_id": debate_id,
+                "question_key": question_key,
+                "answer": answer,
+                "created_at": now,
+            }
+
     def clear_visible_history(self, session_id: str) -> bool:
         with self.lock, self.session() as connection:
             if not connection.execute(
@@ -1011,6 +1428,7 @@ class Database:
 
             now = utc_now()
             connection.execute("DELETE FROM debates WHERE session_id = ?", (session_id,))
+            connection.execute("DELETE FROM agent_experience WHERE scope = 'chat' AND session_id = ?", (session_id,))
             connection.execute(
                 "UPDATE sessions SET updated_at = ? WHERE id = ?", (now, session_id)
             )

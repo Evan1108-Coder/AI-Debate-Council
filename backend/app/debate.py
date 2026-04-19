@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import re
 from textwrap import dedent
 from typing import Any
@@ -17,9 +18,15 @@ from .model_registry import MOCK_MODEL, SupportedModel, get_available_model
 from .runtime_diary import runtime_diary
 
 
+os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "true")
+
 try:
+    import litellm
     from litellm import acompletion
+
+    litellm.suppress_debug_info = True
 except ImportError:  # pragma: no cover - handled at runtime for clearer setup errors.
+    litellm = None
     acompletion = None
 
 
@@ -249,6 +256,30 @@ class DebateManager:
                 "active_debates": self.active_count,
             }
         )
+        await self._send_json(
+            websocket,
+            {
+                "type": "team_preparation_started",
+                "debate_id": debate_id,
+                "message": "Pro and Con teams are preparing private notebooks.",
+            },
+        )
+        await self._prepare_team_notebooks(
+            session_id=session_id,
+            debate_id=debate_id,
+            topic=cleaned_topic,
+            session_settings=opening_settings,
+            selected_model=selected_model,
+            cost_tracker=cost_tracker,
+        )
+        await self._send_json(
+            websocket,
+            {
+                "type": "team_preparation_completed",
+                "debate_id": debate_id,
+                "message": "Team notebooks are ready. Public debate is starting.",
+            },
+        )
 
         flow = self._debate_flow(opening_settings)
         transcript: list[dict[str, Any]] = []
@@ -268,6 +299,12 @@ class DebateManager:
                 generation_settings = self._agent_generation_settings(
                     turn_settings, agent["archetype"]
                 )
+                intelligence_context = self._intelligence_context(
+                    session_id=session_id,
+                    debate_id=debate_id,
+                    agent=agent,
+                    session_settings=turn_settings,
+                )
                 content = await self._stream_agent_turn(
                     websocket=websocket,
                     session_id=session_id,
@@ -280,6 +317,7 @@ class DebateManager:
                     session_settings=turn_settings,
                     generation_settings=generation_settings,
                     cost_tracker=cost_tracker,
+                    intelligence_context=intelligence_context,
                 )
                 transcript.append(
                     {
@@ -298,6 +336,13 @@ class DebateManager:
                         "phase_kind": phase["kind"],
                         "content": content,
                     }
+                )
+                self._capture_turn_intelligence(
+                    session_id=session_id,
+                    debate_id=debate_id,
+                    agent=agent,
+                    phase=phase,
+                    content=content,
                 )
                 latest_analysis = self._with_phase_metadata(
                     analyze_debate(cleaned_topic, transcript),
@@ -338,6 +383,12 @@ class DebateManager:
                         assistant_settings, "judge_assistant"
                     ),
                     cost_tracker=cost_tracker,
+                    intelligence_context=self._intelligence_context(
+                        session_id=session_id,
+                        debate_id=debate_id,
+                        agent=None,
+                        session_settings=assistant_settings,
+                    ),
                 )
 
             judge_settings = self._settings_snapshot(session_id)
@@ -354,6 +405,21 @@ class DebateManager:
                 generation_settings=self._agent_generation_settings(judge_settings, "judge"),
                 judge_assistant_report=judge_assistant_report,
                 cost_tracker=cost_tracker,
+                intelligence_context=self._intelligence_context(
+                    session_id=session_id,
+                    debate_id=debate_id,
+                    agent=None,
+                    session_settings=judge_settings,
+                ),
+            )
+            self._finalize_debate_intelligence(
+                session_id=session_id,
+                debate_id=debate_id,
+                topic=cleaned_topic,
+                transcript=transcript,
+                analysis=latest_analysis,
+                judge_summary=judge_summary,
+                session_settings=judge_settings,
             )
             cost_summary = cost_tracker.summary(judge_settings.get("cost_currency", "USD"))
             self.db.complete_debate(debate_id, judge_summary)
@@ -1169,6 +1235,489 @@ class DebateManager:
             return None
         return payload if isinstance(payload, dict) else None
 
+
+    def _council_settings_snapshot(self) -> dict[str, Any]:
+        return self.db.get_council_settings()
+
+    def _team_agents(self, session_settings: dict[str, Any], team_id: str) -> list[dict[str, Any]]:
+        return [agent for agent in self._active_debate_agents(session_settings) if agent["team"] == team_id]
+
+    async def _prepare_team_notebooks(
+        self,
+        *,
+        session_id: str,
+        debate_id: str,
+        topic: str,
+        session_settings: dict[str, Any],
+        selected_model: SupportedModel,
+        cost_tracker: CostTracker | None,
+    ) -> None:
+        council_settings = self._council_settings_snapshot()
+        depth = str(council_settings.get("debate_intelligence_depth", "Normal"))
+        max_tokens = {"Light": 0, "Normal": 220, "Deep": 360}.get(depth, 220)
+        for team in TEAM_DEFINITIONS:
+            team_id = team["team"]
+            running_notes: list[str] = []
+            agents = self._team_agents(session_settings, team_id)
+            for agent in agents:
+                experience = self._experience_context(session_id, agent["role"], session_settings)
+                if depth == "Light":
+                    content = self._fallback_notebook(topic, team, agent, running_notes, experience)
+                    model_name = "system"
+                else:
+                    model = self._resolve_agent_model(session_settings, agent["archetype"], selected_model)
+                    generation_settings = {
+                        **self._agent_generation_settings(session_settings, agent["archetype"]),
+                        "max_tokens": min(
+                            max_tokens,
+                            int(self._agent_generation_settings(session_settings, agent["archetype"]).get("max_tokens", max_tokens)),
+                        ),
+                    }
+                    messages = self._private_notebook_messages(
+                        topic=topic,
+                        team=team,
+                        agent=agent,
+                        running_notes=running_notes,
+                        experience=experience,
+                        depth=depth,
+                    )
+                    try:
+                        content = await self._private_completion(
+                            model=model,
+                            messages=messages,
+                            generation_settings=generation_settings,
+                            cost_tracker=cost_tracker,
+                            operation=f"Private notebook - {agent['speaker']}",
+                        )
+                    except Exception as exc:
+                        runtime_diary.record(
+                            "backend terminal",
+                            "private notebook fallback",
+                            f"{agent['speaker']} notebook fell back to deterministic summary: {exc}",
+                            session_id=session_id,
+                        )
+                        content = self._fallback_notebook(topic, team, agent, running_notes, experience)
+                    model_name = model.name
+                running_notes.append(f"{agent['speaker']}: {self._clip_for_prompt(content, 360)}")
+                self.db.add_intelligence_record(
+                    session_id=session_id,
+                    debate_id=debate_id,
+                    record_type="team_notebook",
+                    team=team_id,
+                    role=agent["role"],
+                    agent_id=agent["role"],
+                    title=f"{agent['speaker']} private notebook",
+                    content=content,
+                    status="Ready",
+                    confidence=1.0,
+                    payload={
+                        "speaker": agent["speaker"],
+                        "model": model_name,
+                        "depth": depth,
+                        "visible_to_user": True,
+                        "private_from_opponent": True,
+                    },
+                    basis=[{"type": "private_preparation", "topic": topic}],
+                )
+
+    def _private_notebook_messages(
+        self,
+        *,
+        topic: str,
+        team: dict[str, str],
+        agent: dict[str, Any],
+        running_notes: list[str],
+        experience: str,
+        depth: str,
+    ) -> list[dict[str, str]]:
+        return [
+            {
+                "role": "system",
+                "content": dedent(
+                    f"""
+                    You are {agent['speaker']} preparing a private team notebook for the user-visible Team Room.
+                    This is not hidden chain-of-thought. Produce only structured artifacts that can be shown to the user.
+                    Team: {team['team_label']} ({team['stance']}).
+                    Job: {agent['job']}
+                    Never invent past experience. If no experience exists, say no experience is recorded yet.
+                    """
+                ).strip(),
+            },
+            {
+                "role": "user",
+                "content": dedent(
+                    f"""
+                    Topic: {topic}
+                    Preparation depth: {depth}
+
+                    Experience available:
+                    {experience or "No reliable experience recorded yet."}
+
+                    Existing team notes:
+                    {chr(10).join(running_notes) if running_notes else "No previous team notes yet."}
+
+                    Write concise structured notes with these labels:
+                    - Current role objective
+                    - Useful past experience, if any
+                    - Planned contribution
+                    - Weakness or risk to watch
+                    - What the public Advocate should remember
+                    """
+                ).strip(),
+            },
+        ]
+
+    async def _private_completion(
+        self,
+        *,
+        model: SupportedModel,
+        messages: list[dict[str, str]],
+        generation_settings: dict[str, Any],
+        cost_tracker: CostTracker | None,
+        operation: str,
+    ) -> str:
+        if settings.mock_llm:
+            content = sanitize_model_text(
+                f"Current role objective: prepare reliable structured notes. Planned contribution: {messages[-1]['content'][:180]}"
+            )
+            if cost_tracker is not None:
+                cost_tracker.record_call(
+                    model_name=model.name,
+                    input_text=message_input_text(messages),
+                    output_text=content,
+                    operation=operation,
+                )
+            return content
+        if acompletion is None or not model.api_key:
+            raise DebateError(f"Private notebook model unavailable for {model.name}.")
+        response = await acompletion(
+            model=model.litellm_model,
+            messages=messages,
+            api_key=model.api_key,
+            stream=False,
+            temperature=min(0.4, float(generation_settings.get("temperature", 0.4))),
+            max_tokens=int(generation_settings.get("max_tokens", 220)),
+            timeout=min(settings.request_timeout_seconds, 45),
+        )
+        text = sanitize_model_text(self._completion_text(response).strip())
+        if cost_tracker is not None:
+            cost_tracker.record_call(
+                model_name=model.name,
+                input_text=message_input_text(messages),
+                output_text=text,
+                operation=operation,
+            )
+        if not text:
+            raise EmptyCompletionError(f"{model.name} returned an empty private notebook.")
+        return text
+
+    def _fallback_notebook(
+        self,
+        topic: str,
+        team: dict[str, str],
+        agent: dict[str, Any],
+        running_notes: list[str],
+        experience: str,
+    ) -> str:
+        return dedent(
+            f"""
+            Current role objective: {agent['job']}
+            Useful past experience: {experience or 'No reliable experience recorded yet.'}
+            Planned contribution: Help the {team['team_label']} team argue its assigned side on {topic}.
+            Weakness or risk to watch: Do not invent evidence, overclaim, or ignore high-pressure challenges.
+            What the public Advocate should remember: Use this role's contribution only when it directly helps the current phase.
+            """
+        ).strip()
+
+    def _experience_context(
+        self, session_id: str, agent_id: str, session_settings: dict[str, Any]) -> str:
+        if not session_settings.get("use_experience", True):
+            return "Experience use is off for this chat."
+        council_settings = self._council_settings_snapshot()
+        if not council_settings.get("use_agent_identity_profiles", True):
+            return "Agent identity profiles are off in Council Settings."
+        records = self.db.list_agent_experience(
+            agent_id=agent_id,
+            session_id=session_id,
+            include_universal=bool(council_settings.get("universal_experience", True)),
+            limit=6,
+        )
+        if not records:
+            return "No reliable experience recorded yet."
+        return "\n".join(
+            f"- {record['lesson']} (confidence: {record['confidence']}; basis records: {len(record.get('basis') or [])})"
+            for record in records
+        )
+
+    def _intelligence_context(
+        self,
+        *,
+        session_id: str,
+        debate_id: str,
+        agent: dict[str, Any] | None,
+        session_settings: dict[str, Any],
+    ) -> str:
+        records = self.db.list_intelligence_records(session_id, debate_id)
+        if not records:
+            experience = self._experience_context(session_id, agent["role"], session_settings) if agent else ""
+            return experience or "No structured debate intelligence recorded yet."
+        team = agent.get("team") if agent else None
+        relevant = []
+        for record in records[-24:]:
+            if record["record_type"] == "team_notebook" and team and record.get("team") not in {team, ""}:
+                continue
+            relevant.append(record)
+        lines = []
+        if agent:
+            lines.append("Relevant experience:")
+            lines.append(self._experience_context(session_id, agent["role"], session_settings))
+        lines.append("Structured records:")
+        for record in relevant[-16:]:
+            label = record["record_type"].replace("_", " ").title()
+            team_label = f" [{record['team'].upper()}]" if record.get("team") else ""
+            status = f" ({record['status']})" if record.get("status") else ""
+            lines.append(f"- {label}{team_label}{status}: {self._clip_for_prompt(record['title'] + ': ' + record['content'], 260)}")
+        return "\n".join(lines)
+
+    def _split_candidate_sentences(self, content: str) -> list[str]:
+        cleaned = re.sub(r"\s+", " ", sanitize_model_text(content)).strip()
+        if not cleaned:
+            return []
+        parts = re.split(r"(?<=[.!?])\s+", cleaned)
+        return [part.strip() for part in parts if 35 <= len(part.strip()) <= 260]
+
+    def _capture_turn_intelligence(
+        self,
+        *,
+        session_id: str,
+        debate_id: str,
+        agent: dict[str, Any],
+        phase: dict[str, Any],
+        content: str,
+    ) -> None:
+        sentences = self._split_candidate_sentences(content)
+        basis = [{"speaker": agent["speaker"], "phase_key": phase["key"], "phase_title": phase["title"]}]
+        role = agent["role"]
+        team = agent["team"]
+        claim_terms = re.compile(r"\b(should|must|because|therefore|means|proves|shows|better|worse|risk|benefit|cost|fair|unfair)\b", re.I)
+        challenge_terms = re.compile(r"\b(unanswered|unsupported|fails?|cannot|does not|has not|contradicts?|weak|problem|burden)\b", re.I)
+        claim_count = 0
+        challenge_count = 0
+        for sentence in sentences:
+            if sentence.endswith("?") and challenge_count < 2:
+                challenge_count += 1
+                self.db.add_intelligence_record(
+                    session_id=session_id,
+                    debate_id=debate_id,
+                    record_type="challenge",
+                    team=team,
+                    role=role,
+                    agent_id=role,
+                    title=f"Challenge from {agent['speaker']}",
+                    content=sentence,
+                    status="Unanswered",
+                    confidence=0.55,
+                    payload={"target_team": "con" if team == "pro" else "pro", "impact": "medium", "phase_kind": phase.get("kind")},
+                    basis=basis,
+                )
+                continue
+            if challenge_terms.search(sentence) and challenge_count < 2:
+                challenge_count += 1
+                self.db.add_intelligence_record(
+                    session_id=session_id,
+                    debate_id=debate_id,
+                    record_type="challenge",
+                    team=team,
+                    role=role,
+                    agent_id=role,
+                    title=f"Objection from {agent['speaker']}",
+                    content=sentence,
+                    status="Unanswered",
+                    confidence=0.5,
+                    payload={"target_team": "con" if team == "pro" else "pro", "impact": "medium", "phase_kind": phase.get("kind")},
+                    basis=basis,
+                )
+                continue
+            if claim_terms.search(sentence) and claim_count < 2:
+                claim_count += 1
+                self.db.add_intelligence_record(
+                    session_id=session_id,
+                    debate_id=debate_id,
+                    record_type="claim",
+                    team=team,
+                    role=role,
+                    agent_id=role,
+                    title=f"Claim from {agent['speaker']}",
+                    content=sentence,
+                    status="Introduced",
+                    confidence=0.5,
+                    payload={"phase_kind": phase.get("kind")},
+                    basis=basis,
+                )
+        urls = re.findall(r"https?://[^\s)\]]+", content)
+        if urls or agent.get("archetype") == "evidence_researcher":
+            source_type = "live_url" if urls else "model_knowledge"
+            evidence_text = urls[0] if urls else (sentences[0] if sentences else self._clip_for_prompt(content, 240))
+            self.db.add_intelligence_record(
+                session_id=session_id,
+                debate_id=debate_id,
+                record_type="evidence",
+                team=team,
+                role=role,
+                agent_id=role,
+                title=f"Evidence note from {agent['speaker']}",
+                content=evidence_text,
+                status="Verified URL" if urls else "Model knowledge, not live verified",
+                confidence=0.7 if urls else 0.35,
+                payload={"source_type": source_type, "url": urls[0] if urls else "", "verified": bool(urls)},
+                basis=basis,
+            )
+            if not urls and agent.get("archetype") == "evidence_researcher":
+                self.db.add_intelligence_record(
+                    session_id=session_id,
+                    debate_id=debate_id,
+                    record_type="value_record",
+                    team=team,
+                    role=role,
+                    agent_id=role,
+                    title="Evidence honesty note",
+                    content="Researcher evidence was recorded as model knowledge because no live source URL was present.",
+                    status="Notice",
+                    confidence=1.0,
+                    payload={"value": "evidence_honesty"},
+                    basis=basis,
+                )
+
+    def _finalize_debate_intelligence(
+        self,
+        *,
+        session_id: str,
+        debate_id: str,
+        topic: str,
+        transcript: list[dict[str, Any]],
+        analysis: dict[str, Any],
+        judge_summary: str,
+        session_settings: dict[str, Any],
+    ) -> None:
+        records = self.db.list_intelligence_records(session_id, debate_id)
+        claims = [record for record in records if record["record_type"] == "claim"]
+        challenges = [record for record in records if record["record_type"] == "challenge"]
+        evidence = [record for record in records if record["record_type"] == "evidence"]
+        winner = self._detect_winner(judge_summary)
+        scorecard = {
+            "winner": winner,
+            "claim_count": len(claims),
+            "challenge_count": len(challenges),
+            "evidence_count": len(evidence),
+            "unanswered_challenges": sum(1 for item in challenges if item.get("status") == "Unanswered"),
+            "judge_mode": session_settings.get("judge_mode", "Hybrid"),
+            "evidence_strictness": session_settings.get("evidence_strictness", "Normal"),
+        }
+        self.db.add_intelligence_record(
+            session_id=session_id,
+            debate_id=debate_id,
+            record_type="judge_scorecard",
+            title="Judge scorecard inputs",
+            content=(
+                f"Winner detected: {winner}. Claims: {len(claims)}. Challenges: {len(challenges)}. "
+                f"Evidence records: {len(evidence)}. Unanswered challenge records: {scorecard['unanswered_challenges']}."
+            ),
+            status="Completed",
+            confidence=0.75 if winner != "unclear" else 0.45,
+            payload=scorecard,
+            basis=[{"type": "judge_summary", "debate_id": debate_id}],
+        )
+        self.db.add_intelligence_record(
+            session_id=session_id,
+            debate_id=debate_id,
+            record_type="post_debate_review",
+            title="Post-debate review summary",
+            content=self._post_debate_review_text(topic, scorecard, judge_summary),
+            status="Ready for user feedback",
+            confidence=0.7,
+            payload={"feedback_pending": True, **scorecard},
+            basis=[{"type": "judge_summary", "debate_id": debate_id}],
+        )
+        if self._council_settings_snapshot().get("use_value_consequence_system", True):
+            if scorecard["unanswered_challenges"] > 0:
+                self.db.add_intelligence_record(
+                    session_id=session_id,
+                    debate_id=debate_id,
+                    record_type="value_record",
+                    title="Debate quality consequence",
+                    content=f"{scorecard['unanswered_challenges']} challenge record(s) remained marked unanswered; future audits should check dropped arguments carefully.",
+                    status="Audit strictness note",
+                    confidence=0.8,
+                    payload={"value": "debate_quality", "future_effect": "check_dropped_arguments"},
+                    basis=[{"type": "challenge_records", "count": scorecard["unanswered_challenges"]}],
+                )
+        self._save_agent_experience(session_id, debate_id, records, scorecard)
+
+    def _detect_winner(self, judge_summary: str) -> str:
+        text = judge_summary.lower()
+        if re.search(r"\b(winner|verdict|clear winner)\b[^\n]{0,80}\bpro\b", text) or "pro wins" in text:
+            return "pro"
+        if re.search(r"\b(winner|verdict|clear winner)\b[^\n]{0,80}\bcon\b", text) or "con wins" in text:
+            return "con"
+        return "unclear"
+
+    def _post_debate_review_text(self, topic: str, scorecard: dict[str, Any], judge_summary: str) -> str:
+        return dedent(
+            f"""
+            Topic: {topic}
+            Winner detected from Judge text: {scorecard['winner']}
+            Debate objects recorded: {scorecard['claim_count']} claim(s), {scorecard['challenge_count']} challenge(s), {scorecard['evidence_count']} evidence item(s).
+            Unanswered challenge records: {scorecard['unanswered_challenges']}.
+            Judge summary basis: {self._clip_for_prompt(judge_summary, 500)}
+            """
+        ).strip()
+
+    def _save_agent_experience(
+        self,
+        session_id: str,
+        debate_id: str,
+        records: list[dict],
+        scorecard: dict[str, Any],
+    ) -> None:
+        council_settings = self._council_settings_snapshot()
+        scope = "universal" if council_settings.get("universal_experience", True) else "chat"
+        grouped: dict[str, dict[str, int]] = {}
+        for record in records:
+            agent_id = record.get("agent_id") or record.get("role") or "council"
+            grouped.setdefault(agent_id, {"claim": 0, "challenge": 0, "evidence": 0, "value_record": 0})
+            if record["record_type"] in grouped[agent_id]:
+                grouped[agent_id][record["record_type"]] += 1
+        for agent_id, counts in grouped.items():
+            total = sum(counts.values())
+            if total == 0:
+                continue
+            lesson = (
+                f"Observed in debate {debate_id[:8]}: created {counts['claim']} claim record(s), "
+                f"{counts['challenge']} challenge record(s), {counts['evidence']} evidence record(s), "
+                f"and {counts['value_record']} value note(s). Winner detected: {scorecard['winner']}. "
+                "This is factual activity history, not a proven trait."
+            )
+            self.db.add_agent_experience(
+                scope=scope,
+                session_id=session_id if scope == "chat" else None,
+                agent_id=agent_id,
+                lesson_type="debate_activity",
+                lesson=lesson,
+                confidence="low",
+                basis=[{"debate_id": debate_id, "counts": counts, "winner": scorecard["winner"]}],
+            )
+        self.db.add_intelligence_record(
+            session_id=session_id,
+            debate_id=debate_id,
+            record_type="memory_saved",
+            title="Experience memory saved",
+            content=f"Saved factual activity records for {len(grouped)} agent(s) using {scope} scope. No invented strengths or weaknesses were created.",
+            status="Saved",
+            confidence=1.0,
+            payload={"scope": scope, "agent_count": len(grouped)},
+            basis=[{"type": "structured_debate_records", "debate_id": debate_id}],
+        )
+
     async def _stream_agent_turn(
         self,
         *,
@@ -1183,6 +1732,7 @@ class DebateManager:
         session_settings: dict[str, Any],
         generation_settings: dict[str, Any],
         cost_tracker: CostTracker | None = None,
+        intelligence_context: str = "",
     ) -> str:
         stream_id = str(uuid4())
         await self._send_json(
@@ -1211,7 +1761,7 @@ class DebateManager:
         )
 
         messages = self._agent_messages(
-            topic, agent, phase, transcript, session_settings, generation_settings
+            topic, agent, phase, transcript, session_settings, generation_settings, intelligence_context
         )
         cost_start = len(cost_tracker.entries) if cost_tracker else 0
         try:
@@ -1273,6 +1823,7 @@ class DebateManager:
         generation_settings: dict[str, Any],
         judge_assistant_report: str,
         cost_tracker: CostTracker | None = None,
+        intelligence_context: str = "",
     ) -> str:
         stream_id = str(uuid4())
         await self._send_json(
@@ -1295,7 +1846,7 @@ class DebateManager:
             }
         )
         messages = self._judge_messages(
-            topic, transcript, analysis, session_settings, generation_settings, judge_assistant_report
+            topic, transcript, analysis, session_settings, generation_settings, judge_assistant_report, intelligence_context
         )
         cost_start = len(cost_tracker.entries) if cost_tracker else 0
         try:
@@ -1365,6 +1916,7 @@ class DebateManager:
         session_settings: dict[str, Any],
         generation_settings: dict[str, Any],
         cost_tracker: CostTracker | None = None,
+        intelligence_context: str = "",
     ) -> str:
         stream_id = str(uuid4())
         await self._send_json(
@@ -1387,7 +1939,7 @@ class DebateManager:
             }
         )
         messages = self._judge_assistant_messages(
-            topic, transcript, analysis, session_settings, generation_settings
+            topic, transcript, analysis, session_settings, generation_settings, intelligence_context
         )
         cost_start = len(cost_tracker.entries) if cost_tracker else 0
         try:
@@ -1476,7 +2028,55 @@ class DebateManager:
         return content
 
     def _failure_message(self, exc: Exception) -> str:
-        return f"This AI response cannot be generated due to this error: {exc}"
+        return f"This AI response cannot be generated due to this error: {self._provider_error_message(exc)}"
+
+    def _provider_error_message(self, exc: Exception) -> str:
+        original = exc.original if isinstance(exc, CompletionStreamError) else exc
+        seen: set[int] = set()
+        parts: list[str] = []
+
+        def add(value: object) -> None:
+            text = self._clean_error_text(value)
+            if text and text not in parts:
+                parts.append(text)
+
+        current: object = original
+        while isinstance(current, BaseException) and id(current) not in seen:
+            seen.add(id(current))
+            for attr in ("message", "error", "detail", "status_code", "code", "type"):
+                if hasattr(current, attr):
+                    add(getattr(current, attr))
+            add(str(current))
+            current = getattr(current, "original_exception", None) or getattr(current, "original", None) or current.__cause__
+
+        if not parts:
+            parts.append(original.__class__.__name__)
+
+        message = " | ".join(parts)
+        lowered = message.lower()
+        if any(marker in lowered for marker in ("529", "overloaded", "high load")):
+            return f"Provider is overloaded or under high load. Retry shortly. Details: {message}"
+        if "rate limit" in lowered or "429" in lowered:
+            return f"Provider rate limit reached. Wait a little or choose another unlocked model. Details: {message}"
+        if "api key" in lowered or "authentication" in lowered or "unauthorized" in lowered or "401" in lowered:
+            return f"Provider authentication failed. Check the API key for this model's provider. Details: {message}"
+        if "not found" in lowered or "404" in lowered or "model" in lowered and "does not exist" in lowered:
+            return f"Provider rejected the model name or endpoint. Choose another unlocked model or check provider access. Details: {message}"
+        return message
+
+    def _clean_error_text(self, value: object) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, (dict, list)):
+            try:
+                text = json.dumps(value, ensure_ascii=False)
+            except (TypeError, ValueError):
+                text = str(value)
+        else:
+            text = str(value)
+        text = re.sub(r"\x1b\[[0-9;]*m", "", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        return text[:1200]
 
     async def _send_json(self, websocket: WebSocket, payload: dict[str, Any]) -> None:
         try:
@@ -1574,7 +2174,7 @@ class DebateManager:
                     await asyncio.sleep(1.2 * (attempt + 1))
                     continue
                 raise DebateError(
-                    f"{model.name} failed through LiteLLM: {exc.original}"
+                    f"{model.name} failed through LiteLLM: {self._provider_error_message(exc.original)}"
                 ) from exc.original
 
         raise DebateError(f"{model.name} failed through LiteLLM after retries.")
@@ -1695,7 +2295,7 @@ class DebateManager:
         return combined
 
     def _is_retryable_provider_error(self, exc: Exception) -> bool:
-        text = str(exc).lower()
+        text = self._provider_error_message(exc).lower()
         return any(
             marker in text
             for marker in (
@@ -1739,6 +2339,7 @@ class DebateManager:
         transcript: list[dict[str, Any]],
         session_settings: dict[str, Any],
         generation_settings: dict[str, Any],
+        intelligence_context: str = "",
     ) -> list[dict[str, str]]:
         latest_speaker = transcript[-1]["speaker"] if transcript else "the previous speaker"
         previous_debate = self._format_transcript(
@@ -1780,6 +2381,9 @@ class DebateManager:
 
             Latest speaker to answer: {latest_speaker}.
 
+            Team notebook, experience, and pressure state:
+            {intelligence_context or "No structured debate intelligence is available yet."}
+
             Speak naturally as {agent["speaker"]}. Address another debater directly when useful, like a human debate.
             Prefer direct phrasing such as "{latest_speaker}, you said..." or "I disagree with your point about...".
             Do not narrate the debate with phrases like "my opponent says", "my opponent argues", "the opponent says", or "the opposing side says".
@@ -1819,6 +2423,7 @@ class DebateManager:
         analysis: dict[str, Any],
         session_settings: dict[str, Any],
         generation_settings: dict[str, Any],
+        intelligence_context: str = "",
     ) -> list[dict[str, str]]:
         response_length = generation_settings.get("response_length", "Normal")
         word_limit = {"Concise": 220, "Normal": 340, "Detailed": 520}.get(response_length, 340)
@@ -1849,6 +2454,9 @@ class DebateManager:
                     Debate analytics:
                     {format_analytics_report(analysis)}
 
+                    Structured debate intelligence:
+                    {intelligence_context or "No structured debate intelligence is available yet."}
+
                     Produce a Judge Assistant audit under {word_limit} words:
                     - Strongest Pro points
                     - Strongest Con points
@@ -1871,6 +2479,7 @@ class DebateManager:
         session_settings: dict[str, Any],
         generation_settings: dict[str, Any],
         judge_assistant_report: str,
+        intelligence_context: str = "",
     ) -> list[dict[str, str]]:
         assistant_section = judge_assistant_report or "Judge Assistant disabled for this debate."
         response_length = generation_settings.get("response_length", "Normal")
@@ -1904,6 +2513,12 @@ class DebateManager:
 
                     Debate analytics:
                     {format_analytics_report(analysis)}
+
+                    Structured debate intelligence and scorecard inputs:
+                    {intelligence_context or "No structured debate intelligence is available yet."}
+
+                    Judge mode: {session_settings.get("judge_mode", "Hybrid")}
+                    Evidence strictness: {session_settings.get("evidence_strictness", "Normal")}
 
                     Produce a concise verdict with:
                     1. Best affirmative argument

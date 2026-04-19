@@ -3,10 +3,14 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import type {
+  AgentExperienceRecord,
   ChatSession,
+  CouncilSettings,
   CostSummary,
   DebateAnalytics,
   DebateAssignment,
+  DebateIntelligence,
+  DebateIntelligenceRecord,
   DebateMessage,
   DebateRecord,
   ModelsResponse,
@@ -14,7 +18,7 @@ import type {
   SupportedModel
 } from "@/types";
 
-export type RoomPanel = "chat" | "stats" | "settings";
+export type RoomPanel = "chat" | "stats" | "intelligence" | "proRoom" | "conRoom" | "settings";
 
 type DebateRoomProps = {
   selectedSession: ChatSession | null;
@@ -29,6 +33,10 @@ type DebateRoomProps = {
   selectedDebateId: string;
   analytics: DebateAnalytics | null;
   analyticsHistory: DebateAnalytics[];
+  intelligence: DebateIntelligence | null;
+  isTeamPreparing: boolean;
+  showCouncilSettings: boolean;
+  councilSettings: CouncilSettings | null;
   settings: SessionSettings | null;
   isRunning: boolean;
   selectedModelName: string;
@@ -40,6 +48,9 @@ type DebateRoomProps = {
   onDebateChange: (debateId: string) => void;
   onSend: () => void;
   onSettingsChange: (updates: Partial<SessionSettings>) => void;
+  onCouncilSettingsChange: (updates: Partial<CouncilSettings>) => void;
+  onResetUniversalIdentities: (confirmation: string) => Promise<{ deleted: number }>;
+  onFeedbackSubmit: (questionKey: string, answer: string) => Promise<void>;
   onRename: (session: ChatSession, name: string) => Promise<boolean>;
   onRenameDebate: (debate: DebateRecord, name: string) => Promise<boolean>;
   onDeleteRequest: (session: ChatSession) => void;
@@ -69,6 +80,9 @@ const roleStyles: Record<string, string> = {
 const panels: Array<{ id: RoomPanel; label: string }> = [
   { id: "chat", label: "Debating Chats" },
   { id: "stats", label: "Graphs & Statistics" },
+  { id: "intelligence", label: "Debate Intelligence" },
+  { id: "proRoom", label: "Pro Team Room" },
+  { id: "conRoom", label: "Con Team Room" },
   { id: "settings", label: "Chat Settings" }
 ];
 
@@ -129,6 +143,10 @@ export function DebateRoom({
   selectedDebateId,
   analytics,
   analyticsHistory,
+  intelligence,
+  isTeamPreparing,
+  showCouncilSettings,
+  councilSettings,
   settings,
   isRunning,
   selectedModelName,
@@ -140,6 +158,9 @@ export function DebateRoom({
   onDebateChange,
   onSend,
   onSettingsChange,
+  onCouncilSettingsChange,
+  onResetUniversalIdentities,
+  onFeedbackSubmit,
   onRename,
   onRenameDebate,
   onDeleteRequest,
@@ -162,6 +183,23 @@ export function DebateRoom({
       bottomRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
     }
   }, [messages, partialList.length, settings?.auto_scroll, activePanel]);
+
+  if (showCouncilSettings) {
+    return (
+      <main className="flex h-full min-w-0 flex-1 flex-col bg-[#f5f7f6]">
+        <section className="border-b border-zinc-300 bg-white p-4">
+          <p className="text-sm font-medium text-emerald-700">Council system</p>
+          <h2 className="text-2xl font-semibold text-zinc-950">Council Settings</h2>
+          <p className="mt-1 text-sm text-zinc-600">Universal behavior, long-term experience, identity memory, and reset controls.</p>
+        </section>
+        <CouncilSettingsPanel
+          settings={councilSettings}
+          onChange={onCouncilSettingsChange}
+          onResetUniversalIdentities={onResetUniversalIdentities}
+        />
+      </main>
+    );
+  }
 
   if (!selectedSession) {
     return (
@@ -211,7 +249,7 @@ export function DebateRoom({
 
         <section className="flex min-w-0 flex-1 flex-col">
           <div className="border-b border-zinc-300 bg-white p-2 lg:hidden">
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
               {panels.map((panel) => (
                 <button
                   key={panel.id}
@@ -232,6 +270,7 @@ export function DebateRoom({
           {activePanel === "chat" ? (
             <>
               <section className="min-h-0 flex-1 overflow-y-auto p-4">
+                {isTeamPreparing ? <TeamPreparationNotice /> : null}
                 {assignments.length > 0 ? <AssignmentStrip assignments={assignments} /> : null}
                 {messages.length === 0 && partialList.length === 0 ? (
                   <div className="mx-auto flex h-full max-w-2xl flex-col justify-center text-center">
@@ -277,6 +316,21 @@ export function DebateRoom({
               selectedDebateId={selectedDebateId}
               onDebateChange={onDebateChange}
             />
+          ) : null}
+
+          {activePanel === "intelligence" ? (
+            <IntelligencePanel
+              intelligence={intelligence}
+              onFeedbackSubmit={onFeedbackSubmit}
+            />
+          ) : null}
+
+          {activePanel === "proRoom" ? (
+            <TeamRoomPanel intelligence={intelligence} team="pro" />
+          ) : null}
+
+          {activePanel === "conRoom" ? (
+            <TeamRoomPanel intelligence={intelligence} team="con" />
           ) : null}
 
           {activePanel === "settings" ? (
@@ -938,6 +992,550 @@ function CitationBox({
   );
 }
 
+
+function TeamPreparationNotice() {
+  return (
+    <div className="mx-auto mb-4 grid max-w-4xl gap-3 md:grid-cols-2">
+      <div className="rounded-md border border-emerald-200 bg-emerald-50 p-4">
+        <p className="text-sm font-semibold text-emerald-900">Pro Team Room is preparing</p>
+        <p className="mt-1 text-sm text-emerald-800">
+          The Pro team is building a private notebook from its assigned roles, usable experience,
+          and the current topic. The opponent will not receive these notes, but you can review them.
+        </p>
+      </div>
+      <div className="rounded-md border border-red-200 bg-red-50 p-4">
+        <p className="text-sm font-semibold text-red-900">Con Team Room is preparing</p>
+        <p className="mt-1 text-sm text-red-800">
+          The Con team is building a separate private notebook before the public debate starts.
+          Public speaking begins after both rooms finish their structured notes.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function IntelligencePanel({
+  intelligence,
+  onFeedbackSubmit
+}: {
+  intelligence: DebateIntelligence | null;
+  onFeedbackSubmit: (questionKey: string, answer: string) => Promise<void>;
+}) {
+  if (!intelligence?.debate) {
+    return (
+      <section className="min-h-0 flex-1 overflow-y-auto p-6">
+        <div className="mx-auto max-w-5xl">
+          <h2 className="text-2xl font-semibold text-zinc-950">Debate Intelligence</h2>
+          <p className="mt-2 text-zinc-600">
+            Start a debate to create tracked claims, challenges, evidence, scorecards, and real experience records.
+          </p>
+        </div>
+      </section>
+    );
+  }
+
+  const debate = intelligence.debate;
+  const unresolved = intelligence.challenges.filter((record) => /unanswered|ignored/i.test(record.status));
+  const verifiedEvidence = intelligence.evidence.filter((record) => /verified/i.test(record.status));
+
+  return (
+    <section className="min-h-0 flex-1 overflow-y-auto p-4">
+      <div className="mx-auto max-w-6xl space-y-4">
+        <div className="flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+          <div>
+            <h2 className="text-2xl font-semibold text-zinc-950">Debate Intelligence</h2>
+            <p className="text-sm text-zinc-600">
+              {debate.name} · {debate.topic}
+            </p>
+          </div>
+          <p className="text-sm font-medium text-emerald-800">
+            {intelligence.records.length} structured record(s)
+          </p>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-4">
+          <Metric label="Tracked claims" value={String(intelligence.claims.length)} />
+          <Metric label="Open challenges" value={String(unresolved.length)} />
+          <Metric label="Evidence records" value={String(intelligence.evidence.length)} />
+          <Metric label="Verified URLs" value={String(verifiedEvidence.length)} />
+        </div>
+
+        <Panel title="Post-debate review summary">
+          <RecordList
+            records={intelligence.reviews}
+            emptyText="The review appears after the Judge finishes and the debate is finalized."
+          />
+        </Panel>
+
+        <div className="grid gap-3 xl:grid-cols-2">
+          <Panel title="Claim Ledger">
+            <RecordList
+              records={intelligence.claims}
+              emptyText="No claim objects have been recorded yet. New public turns create claim records from the actual transcript."
+            />
+          </Panel>
+          <Panel title="Challenge And Resolution Tracker">
+            <RecordList
+              records={intelligence.challenges}
+              emptyText="No challenges have been recorded yet. Critic, Examiner, and question-like turns create challenge records."
+            />
+          </Panel>
+        </div>
+
+        <div className="grid gap-3 xl:grid-cols-2">
+          <Panel title="Evidence Ledger">
+            <RecordList
+              records={intelligence.evidence}
+              emptyText="No evidence records yet. Model-knowledge evidence is labeled separately from live URL evidence."
+            />
+          </Panel>
+          <Panel title="Judge Scorecard">
+            <RecordList
+              records={intelligence.scorecards}
+              emptyText="The scorecard appears after the Judge verdict. It is based on tracked claims, challenges, evidence, and the Judge text."
+            />
+          </Panel>
+        </div>
+
+        <div className="grid gap-3 xl:grid-cols-2">
+          <Panel title="Value And Consequence System">
+            <RecordList
+              records={intelligence.values}
+              emptyText="No value or consequence notes yet. The system records only concrete issues like unsupported evidence or dropped challenges."
+            />
+          </Panel>
+          <Panel title="Cross-Debate Institutional Memory">
+            <RecordList
+              records={intelligence.memories}
+              emptyText="No memory save event for this debate yet. Memory records are created from saved debate objects, not invented traits."
+            />
+            <ExperienceList experiences={intelligence.experiences} />
+          </Panel>
+        </div>
+
+        <FeedbackQuestionsPanel
+          questions={intelligence.feedback_questions}
+          onFeedbackSubmit={onFeedbackSubmit}
+        />
+      </div>
+    </section>
+  );
+}
+
+function TeamRoomPanel({
+  intelligence,
+  team
+}: {
+  intelligence: DebateIntelligence | null;
+  team: "pro" | "con";
+}) {
+  const teamName = team === "pro" ? "Pro" : "Con";
+  const records = intelligence?.team_rooms[team] ?? [];
+  const notebooks = records.filter((record) => record.record_type === "team_notebook");
+  const pressureRecords = records.filter((record) => record.record_type !== "team_notebook");
+  const experiences = (intelligence?.experiences ?? []).filter((experience) =>
+    experience.agent_id.toLowerCase().startsWith(`${team}_`)
+  );
+
+  if (!intelligence?.debate) {
+    return (
+      <section className="min-h-0 flex-1 overflow-y-auto p-6">
+        <div className="mx-auto max-w-5xl">
+          <h2 className="text-2xl font-semibold text-zinc-950">{teamName} Team Room</h2>
+          <p className="mt-2 text-zinc-600">
+            This room fills with view-only private team notebooks after a debate starts.
+          </p>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <section className="min-h-0 flex-1 overflow-y-auto p-4">
+      <div className="mx-auto max-w-6xl space-y-4">
+        <div>
+          <h2 className="text-2xl font-semibold text-zinc-950">{teamName} Team Room</h2>
+          <p className="mt-1 text-sm text-zinc-600">
+            Private from the opposing team inside the debate system, visible to you for transparency.
+            These are structured notebooks and records, not hidden chain-of-thought.
+          </p>
+        </div>
+
+        <Panel title={`${teamName} Private Notebook`}>
+          <RecordList
+            records={notebooks}
+            emptyText="No notebook records yet. The team preparation phase creates these before public debate begins."
+          />
+        </Panel>
+
+        <div className="grid gap-3 xl:grid-cols-2">
+          <Panel title={`${teamName} Pressure And Objects`}>
+            <RecordList
+              records={pressureRecords}
+              emptyText="No team-specific claims, challenges, or evidence records yet."
+              limit={10}
+            />
+          </Panel>
+          <Panel title={`${teamName} Experience Identity`}>
+            <p className="mb-3 text-sm text-zinc-600">
+              Identity is built from real saved activity only. Empty identity is valid; the system should not invent strengths or memories.
+            </p>
+            <ExperienceList experiences={experiences} emptyText={`No reliable ${teamName} experience recorded yet.`} />
+          </Panel>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function CouncilSettingsPanel({
+  settings,
+  onChange,
+  onResetUniversalIdentities
+}: {
+  settings: CouncilSettings | null;
+  onChange: (updates: Partial<CouncilSettings>) => void;
+  onResetUniversalIdentities: (confirmation: string) => Promise<{ deleted: number }>;
+}) {
+  const [resetOpen, setResetOpen] = useState(false);
+  const [confirmation, setConfirmation] = useState("");
+  const [notice, setNotice] = useState<string | null>(null);
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [isResetting, setIsResetting] = useState(false);
+
+  if (!settings) {
+    return (
+      <section className="min-h-0 flex-1 overflow-y-auto p-6">
+        <p className="text-zinc-600">Loading Council Settings...</p>
+      </section>
+    );
+  }
+
+  const handleReset = async () => {
+    setResetError(null);
+    setNotice(null);
+    setIsResetting(true);
+    try {
+      const result = await onResetUniversalIdentities(confirmation);
+      setNotice(`Reset complete. ${result.deleted} universal identity record(s) were hidden.`);
+      setConfirmation("");
+      setResetOpen(false);
+    } catch (exc) {
+      setResetError(exc instanceof Error ? exc.message : "Could not reset universal identities.");
+    } finally {
+      setIsResetting(false);
+    }
+  };
+
+  return (
+    <section className="min-h-0 flex-1 overflow-y-auto p-4">
+      <div className="mx-auto max-w-5xl space-y-4">
+        <Panel title="Universal experience">
+          <div className="grid gap-3 md:grid-cols-2">
+            <ToggleSetting
+              label="Universal Experience"
+              value={settings.universal_experience}
+              onChange={(value) => onChange({ universal_experience: value })}
+            />
+            <ToggleSetting
+              label="Use Agent Identity Profiles"
+              value={settings.use_agent_identity_profiles}
+              onChange={(value) => onChange({ use_agent_identity_profiles: value })}
+            />
+          </div>
+          <p className="mt-3 text-sm text-zinc-600">
+            Universal experience lets agent identities use factual records from all chats. Identity profiles stay empty until real debate records exist.
+          </p>
+        </Panel>
+
+        <Panel title="Debate intelligence defaults">
+          <div className="grid gap-3 md:grid-cols-3">
+            <SelectSetting
+              label="Debate Intelligence Depth"
+              value={settings.debate_intelligence_depth}
+              options={["Light", "Normal", "Deep"]}
+              onChange={(value) =>
+                onChange({ debate_intelligence_depth: value as CouncilSettings["debate_intelligence_depth"] })
+              }
+            />
+            <SelectSetting
+              label="Default Judge Mode"
+              value={settings.default_judge_mode}
+              options={["Debate Performance", "Truth-Seeking", "Hybrid"]}
+              onChange={(value) =>
+                onChange({ default_judge_mode: value as CouncilSettings["default_judge_mode"] })
+              }
+            />
+            <ToggleSetting
+              label="Value Consequence System"
+              value={settings.use_value_consequence_system}
+              onChange={(value) => onChange({ use_value_consequence_system: value })}
+            />
+          </div>
+          <p className="mt-3 text-sm text-zinc-600">
+            Light uses deterministic notebooks. Normal and Deep ask the assigned models to produce user-visible structured team notes before public debate.
+          </p>
+        </Panel>
+
+        <Panel title="Reset universal identities">
+          <p className="text-sm text-zinc-600">
+            This hides universal agent experience records. It does not delete chats, messages, or debate statistics.
+            Use this only when you want the council identities to start learning again from zero.
+          </p>
+          {!resetOpen ? (
+            <button
+              type="button"
+              onClick={() => {
+                setResetOpen(true);
+                setNotice(null);
+                setResetError(null);
+              }}
+              className="mt-3 rounded-md border border-red-300 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-50"
+            >
+              Reset Universal Agent Identities
+            </button>
+          ) : (
+            <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3">
+              <p className="text-sm font-semibold text-red-900">
+                Type RESET COUNCIL IDENTITIES to confirm.
+              </p>
+              <input
+                value={confirmation}
+                onChange={(event) => setConfirmation(event.target.value)}
+                className="mt-2 h-10 w-full rounded-md border border-red-300 bg-white px-3 text-sm"
+                placeholder="RESET COUNCIL IDENTITIES"
+              />
+              {resetError ? <p className="mt-2 text-sm text-red-800">{resetError}</p> : null}
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={handleReset}
+                  disabled={isResetting || confirmation !== "RESET COUNCIL IDENTITIES"}
+                  className="rounded-md bg-red-700 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-zinc-400"
+                >
+                  {isResetting ? "Resetting..." : "Confirm Reset"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setResetOpen(false);
+                    setConfirmation("");
+                    setResetError(null);
+                  }}
+                  className="rounded-md border border-zinc-300 px-4 py-2 text-sm font-semibold text-zinc-800 hover:bg-zinc-100"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+          {notice ? <p className="mt-3 text-sm text-emerald-700">{notice}</p> : null}
+        </Panel>
+      </div>
+    </section>
+  );
+}
+
+function RecordList({
+  records,
+  emptyText,
+  limit = 6
+}: {
+  records: DebateIntelligenceRecord[];
+  emptyText: string;
+  limit?: number;
+}) {
+  if (records.length === 0) {
+    return <p className="text-sm text-zinc-600">{emptyText}</p>;
+  }
+  return (
+    <div className="space-y-2">
+      {records.slice(-limit).reverse().map((record) => (
+        <RecordCard key={record.id} record={record} />
+      ))}
+      {records.length > limit ? (
+        <p className="text-xs text-zinc-500">Showing latest {limit} of {records.length} record(s).</p>
+      ) : null}
+    </div>
+  );
+}
+
+function RecordCard({ record }: { record: DebateIntelligenceRecord }) {
+  const team = record.team ? `${record.team.toUpperCase()} · ` : "";
+  const role = record.role ? formatAgentLabel(record.role) : "System";
+  return (
+    <article className="rounded-md border border-zinc-200 bg-zinc-50 p-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="rounded bg-white px-2 py-1 text-xs font-semibold text-zinc-700">
+          {formatRecordType(record.record_type)}
+        </span>
+        <span className="rounded bg-white px-2 py-1 text-xs text-zinc-600">{team}{role}</span>
+        {record.status ? (
+          <span className="rounded bg-white px-2 py-1 text-xs text-zinc-600">{record.status}</span>
+        ) : null}
+        <span className="rounded bg-white px-2 py-1 text-xs text-zinc-600">
+          confidence {Math.round((record.confidence || 0) * 100)}%
+        </span>
+      </div>
+      <p className="mt-2 text-sm font-semibold text-zinc-950">{record.title}</p>
+      <p className="mt-1 whitespace-pre-wrap text-sm leading-6 text-zinc-700">{record.content}</p>
+      <p className="mt-2 text-xs text-zinc-500">
+        Basis: {Array.isArray(record.basis) ? record.basis.length : 0} trace item(s). Updated {new Date(record.updated_at).toLocaleString()}.
+      </p>
+    </article>
+  );
+}
+
+function ExperienceList({
+  experiences,
+  emptyText = "No reliable experience recorded yet."
+}: {
+  experiences: AgentExperienceRecord[];
+  emptyText?: string;
+}) {
+  if (experiences.length === 0) {
+    return <p className="text-sm text-zinc-600">{emptyText}</p>;
+  }
+  return (
+    <div className="mt-3 space-y-2">
+      {experiences.slice(0, 8).map((experience) => (
+        <div key={experience.id} className="rounded-md border border-zinc-200 bg-zinc-50 p-3 text-sm">
+          <div className="flex flex-wrap gap-2">
+            <span className="rounded bg-white px-2 py-1 text-xs font-semibold text-zinc-700">
+              {formatAgentLabel(experience.agent_id)}
+            </span>
+            <span className="rounded bg-white px-2 py-1 text-xs text-zinc-600">{experience.scope}</span>
+            <span className="rounded bg-white px-2 py-1 text-xs text-zinc-600">
+              confidence {experience.confidence}
+            </span>
+          </div>
+          <p className="mt-2 leading-6 text-zinc-700">{experience.lesson}</p>
+          <p className="mt-1 text-xs text-zinc-500">
+            Basis: {Array.isArray(experience.basis) ? experience.basis.length : 0} trace item(s). Used {experience.use_count} time(s).
+          </p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function FeedbackQuestionsPanel({
+  questions,
+  onFeedbackSubmit
+}: {
+  questions: DebateIntelligence["feedback_questions"];
+  onFeedbackSubmit: (questionKey: string, answer: string) => Promise<void>;
+}) {
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [otherAnswers, setOtherAnswers] = useState<Record<string, string>>({});
+  const [sent, setSent] = useState<Record<string, boolean>>({});
+  const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  if (questions.length === 0) {
+    return null;
+  }
+
+  const submit = async (key: string) => {
+    const selected = answers[key] ?? "";
+    const answer = selected === "Other..." ? otherAnswers[key] ?? "" : selected;
+    if (!answer.trim()) {
+      return;
+    }
+    setSavingKey(key);
+    setError(null);
+    try {
+      await onFeedbackSubmit(key, answer.trim());
+      setSent((current) => ({ ...current, [key]: true }));
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "Could not save feedback.");
+    } finally {
+      setSavingKey(null);
+    }
+  };
+
+  return (
+    <Panel title="Post-debate user feedback">
+      <p className="mb-3 text-sm text-zinc-600">
+        Optional feedback teaches the council through saved records. You can skip everything; new debates refresh these questions.
+      </p>
+      <div className="space-y-3">
+        {questions.map((question) => {
+          const selected = answers[question.key] ?? "";
+          const freeText = otherAnswers[question.key] ?? "";
+          const answer = selected === "Other..." ? freeText : selected;
+          return (
+            <div key={question.key} className="rounded-md border border-zinc-200 p-3">
+              <p className="text-sm font-semibold text-zinc-950">{question.question}</p>
+              <div className="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+                {question.options.map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    onClick={() => {
+                      setAnswers((current) => ({ ...current, [question.key]: option }));
+                      setSent((current) => ({ ...current, [question.key]: false }));
+                    }}
+                    className={`rounded-md border px-3 py-2 text-left text-sm ${
+                      selected === option
+                        ? "border-zinc-950 bg-zinc-950 text-white"
+                        : "border-zinc-300 text-zinc-700 hover:bg-zinc-100"
+                    }`}
+                  >
+                    {option}
+                  </button>
+                ))}
+              </div>
+              {selected === "Other..." ? (
+                <textarea
+                  value={freeText}
+                  onChange={(event) => {
+                    setOtherAnswers((current) => ({ ...current, [question.key]: event.target.value }));
+                    setSent((current) => ({ ...current, [question.key]: false }));
+                  }}
+                  rows={2}
+                  className="mt-2 w-full resize-none rounded-md border border-zinc-300 px-3 py-2 text-sm"
+                  placeholder="Write your own feedback."
+                />
+              ) : null}
+              <div className="mt-3 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => submit(question.key)}
+                  disabled={savingKey === question.key || !answer.trim() || sent[question.key]}
+                  className="rounded-md bg-zinc-950 px-3 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-zinc-400"
+                >
+                  {sent[question.key] ? "Saved" : savingKey === question.key ? "Saving..." : "Save Feedback"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAnswers((current) => ({ ...current, [question.key]: "" }));
+                    setOtherAnswers((current) => ({ ...current, [question.key]: "" }));
+                    setSent((current) => ({ ...current, [question.key]: false }));
+                  }}
+                  className="rounded-md border border-zinc-300 px-3 py-2 text-sm font-semibold text-zinc-700 hover:bg-zinc-100"
+                >
+                  Skip
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      {error ? <p className="mt-3 text-sm text-red-700">{error}</p> : null}
+    </Panel>
+  );
+}
+
+function formatRecordType(value: string) {
+  return value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
+function formatAgentLabel(value: string) {
+  return value.replace(/_/g, " ").replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 function SettingsPanel({
   session,
   settings,
@@ -1241,6 +1839,34 @@ function SettingsPanel({
             onChange={updateAgentSetting}
             showAlwaysOn
           />
+        </Panel>
+
+        <Panel title="Debate Intelligence">
+          <p className="mb-3 text-sm text-zinc-600">
+            These settings decide how this chat uses real experience and how strict the Judge should be with the tracked debate objects.
+          </p>
+          <div className="grid gap-3 md:grid-cols-3">
+            <ToggleSetting
+              label="Use Experience"
+              value={settings.use_experience}
+              onChange={(value) => onSettingsChange({ use_experience: value })}
+            />
+            <SelectSetting
+              label="Judge Mode"
+              value={settings.judge_mode}
+              options={["Debate Performance", "Truth-Seeking", "Hybrid"]}
+              onChange={(value) => onSettingsChange({ judge_mode: value })}
+            />
+            <SelectSetting
+              label="Evidence Strictness"
+              value={settings.evidence_strictness}
+              options={["Relaxed", "Normal", "Strict"]}
+              onChange={(value) => onSettingsChange({ evidence_strictness: value })}
+            />
+          </div>
+          <p className="mt-3 text-xs text-zinc-600">
+            Turning experience off only affects this chat. Universal experience scope is controlled from Council Settings.
+          </p>
         </Panel>
 
         <Panel title="Prompt & tone">
@@ -1749,6 +2375,25 @@ function NumberSetting({
   max: number;
   onChange: (value: number) => void;
 }) {
+  const [draft, setDraft] = useState(String(value));
+
+  useEffect(() => {
+    setDraft(String(value));
+  }, [value]);
+
+  const commit = (raw: string) => {
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) {
+      setDraft(String(value));
+      return;
+    }
+    const clamped = Math.max(min, Math.min(max, Math.round(parsed)));
+    setDraft(String(clamped));
+    if (clamped !== value) {
+      onChange(clamped);
+    }
+  };
+
   return (
     <label className="text-sm font-medium text-zinc-900">
       {label}
@@ -1756,8 +2401,23 @@ function NumberSetting({
         type="number"
         min={min}
         max={max}
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
+        value={draft}
+        onChange={(event) => {
+          const next = event.target.value;
+          setDraft(next);
+          if (!next.trim() || next === "-" || next === "+") {
+            return;
+          }
+          const parsed = Number(next);
+          if (!Number.isFinite(parsed)) {
+            return;
+          }
+          const rounded = Math.round(parsed);
+          if (rounded >= min && rounded <= max && rounded !== value) {
+            onChange(rounded);
+          }
+        }}
+        onBlur={() => commit(draft)}
         className="mt-1 h-11 w-full rounded-md border border-zinc-300 px-3"
       />
     </label>
@@ -1788,7 +2448,12 @@ function RangeSetting({
         max={max}
         step={step}
         value={value}
-        onChange={(event) => onChange(Number(event.target.value))}
+        onChange={(event) => {
+          const parsed = Number(event.target.value);
+          if (Number.isFinite(parsed)) {
+            onChange(Math.max(min, Math.min(max, parsed)));
+          }
+        }}
         className="mt-3 w-full"
       />
     </label>

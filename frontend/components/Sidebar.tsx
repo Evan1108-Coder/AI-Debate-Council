@@ -8,6 +8,8 @@ type SidebarProps = {
   maxSessions: number;
   onNew: () => void;
   onSelect: (id: string) => void;
+  onCouncilSettings: () => void;
+  councilSettingsActive: boolean;
 };
 
 export function Sidebar({
@@ -15,7 +17,9 @@ export function Sidebar({
   selectedId,
   maxSessions,
   onNew,
-  onSelect
+  onSelect,
+  onCouncilSettings,
+  councilSettingsActive
 }: SidebarProps) {
   const limitReached = sessions.length >= maxSessions;
 
@@ -74,6 +78,21 @@ export function Sidebar({
           })}
         </div>
       </nav>
+
+      <div className="border-t border-zinc-300 p-3">
+        <button
+          type="button"
+          onClick={onCouncilSettings}
+          className={`flex w-full items-center justify-between rounded-md px-3 py-3 text-left text-sm font-semibold ${
+            councilSettingsActive
+              ? "bg-zinc-950 text-white"
+              : "text-zinc-800 hover:bg-zinc-100"
+          }`}
+        >
+          <span>Council Settings</span>
+          <span aria-hidden="true">⚙</span>
+        </button>
+      </div>
     </aside>
   );
 }

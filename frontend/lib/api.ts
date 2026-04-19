@@ -1,6 +1,8 @@
 import type {
   ChatSession,
+  CouncilSettings,
   DebateAnalytics,
+  DebateIntelligence,
   DebateMessage,
   DebateRecord,
   ModelsResponse,
@@ -52,6 +54,24 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
 export function getModels() {
   return request<ModelsResponse>("/api/models");
+}
+
+export function getCouncilSettings() {
+  return request<CouncilSettings>("/api/council-settings");
+}
+
+export function updateCouncilSettings(updates: Partial<CouncilSettings>) {
+  return request<CouncilSettings>("/api/council-settings", {
+    method: "PATCH",
+    body: JSON.stringify(updates)
+  });
+}
+
+export function resetUniversalAgentExperience(confirmation: string) {
+  return request<{ deleted: number }>("/api/council-settings/reset-agent-experience", {
+    method: "POST",
+    body: JSON.stringify({ confirmation })
+  });
 }
 
 export function listSessions() {
@@ -114,6 +134,23 @@ export function updateSessionSettings(sessionId: string, updates: Partial<Sessio
 export function getSessionAnalytics(sessionId: string, debateId?: string) {
   const suffix = debateId ? `?debate_id=${encodeURIComponent(debateId)}` : "";
   return request<DebateAnalytics>(`/api/sessions/${sessionId}/analytics${suffix}`);
+}
+
+export function getSessionIntelligence(sessionId: string, debateId?: string) {
+  const suffix = debateId ? `?debate_id=${encodeURIComponent(debateId)}` : "";
+  return request<DebateIntelligence>(`/api/sessions/${sessionId}/intelligence${suffix}`);
+}
+
+export function submitDebateFeedback(
+  sessionId: string,
+  debateId: string,
+  questionKey: string,
+  answer: string
+) {
+  return request<{ id: string }>(`/api/sessions/${sessionId}/debates/${debateId}/feedback`, {
+    method: "POST",
+    body: JSON.stringify({ question_key: questionKey, answer })
+  });
 }
 
 export async function recordRuntimeDiary(

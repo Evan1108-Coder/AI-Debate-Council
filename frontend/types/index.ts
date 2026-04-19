@@ -25,6 +25,61 @@ export type DebateMessage = {
   created_at: string;
 };
 
+export type CouncilSettings = {
+  universal_experience: boolean;
+  use_agent_identity_profiles: boolean;
+  debate_intelligence_depth: "Light" | "Normal" | "Deep";
+  use_value_consequence_system: boolean;
+  default_judge_mode: "Debate Performance" | "Truth-Seeking" | "Hybrid";
+};
+
+export type DebateIntelligenceRecord = {
+  id: string;
+  session_id: string;
+  debate_id: string;
+  record_type: string;
+  team: string;
+  role: string;
+  agent_id: string;
+  title: string;
+  content: string;
+  status: string;
+  confidence: number;
+  payload: Record<string, unknown>;
+  basis: unknown[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type AgentExperienceRecord = {
+  id: string;
+  scope: string;
+  session_id: string | null;
+  agent_id: string;
+  lesson_type: string;
+  lesson: string;
+  confidence: string;
+  basis: unknown[];
+  created_at: string;
+  last_used_at: string | null;
+  use_count: number;
+};
+
+export type DebateIntelligence = {
+  debate: DebateRecord | null;
+  records: DebateIntelligenceRecord[];
+  claims: DebateIntelligenceRecord[];
+  challenges: DebateIntelligenceRecord[];
+  evidence: DebateIntelligenceRecord[];
+  scorecards: DebateIntelligenceRecord[];
+  values: DebateIntelligenceRecord[];
+  memories: DebateIntelligenceRecord[];
+  reviews: DebateIntelligenceRecord[];
+  team_rooms: { pro: DebateIntelligenceRecord[]; con: DebateIntelligenceRecord[] };
+  experiences: AgentExperienceRecord[];
+  feedback_questions: Array<{ key: string; question: string; options: string[] }>;
+};
+
 export type SessionSettings = {
   overall_model: string;
   debaters_per_team: number;
@@ -60,6 +115,9 @@ export type SessionSettings = {
   fact_check_mode: boolean;
   export_format: string;
   auto_save_interval: number;
+  use_experience: boolean;
+  judge_mode: string;
+  evidence_strictness: string;
   updated_at?: string;
 };
 
@@ -278,6 +336,11 @@ export type DebateEvent =
       mode: "chat";
       debate: { id: string; topic: string };
       selected_model: SupportedModel;
+    }
+  | {
+      type: "team_preparation_started" | "team_preparation_completed";
+      debate_id: string;
+      message: string;
     }
   | {
       type: "message_started";
