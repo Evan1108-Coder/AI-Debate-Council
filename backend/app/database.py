@@ -237,6 +237,8 @@ class Database:
 
                 CREATE INDEX IF NOT EXISTS idx_messages_session_sequence
                     ON messages(session_id, sequence);
+                CREATE INDEX IF NOT EXISTS idx_messages_debate_id
+                    ON messages(debate_id);
                 CREATE TABLE IF NOT EXISTS debate_intelligence (
                     id TEXT PRIMARY KEY,
                     session_id TEXT NOT NULL,
@@ -948,7 +950,11 @@ class Database:
             ).fetchone()["total"]
             if remaining == 0:
                 connection.execute(
-                    "UPDATE app_metadata SET value = '0' WHERE key = ?",
+                    """
+                    INSERT INTO app_metadata (key, value)
+                    VALUES (?, '0')
+                    ON CONFLICT(key) DO UPDATE SET value = '0'
+                    """,
                     (SESSION_COUNTER_KEY,),
                 )
             return deleted
@@ -1268,6 +1274,63 @@ class Database:
                 ).fetchall()
             return [self._intelligence_row_to_dict(row) or {} for row in rows]
 
+    def update_intelligence_record(
+        self,
+        record_id: str,
+        *,
+        status: str | None = None,
+        confidence: float | None = None,
+        payload: dict | None = None,
+        basis: list | None = None,
+        content: str | None = None,
+        title: str | None = None,
+    ) -> dict | None:
+        with self.lock, self.session() as connection:
+            row = connection.execute(
+                "SELECT * FROM debate_intelligence WHERE id = ? AND hidden_at IS NULL",
+                (record_id,),
+            ).fetchone()
+            existing = self._intelligence_row_to_dict(row)
+            if not existing:
+                return None
+            next_payload = existing["payload"] if payload is None else payload
+            next_basis = existing["basis"] if basis is None else basis
+            next_status = existing["status"] if status is None else status[:80]
+            next_confidence = (
+                existing["confidence"]
+                if confidence is None
+                else max(0.0, min(1.0, float(confidence)))
+            )
+            next_content = existing["content"] if content is None else content[:4000]
+            next_title = existing["title"] if title is None else title[:160]
+            connection.execute(
+                """
+                UPDATE debate_intelligence
+                SET title = ?,
+                    content = ?,
+                    status = ?,
+                    confidence = ?,
+                    payload = ?,
+                    basis = ?,
+                    updated_at = ?
+                WHERE id = ?
+                """,
+                (
+                    next_title,
+                    next_content,
+                    next_status,
+                    next_confidence,
+                    json.dumps(next_payload or {}),
+                    json.dumps(next_basis or []),
+                    utc_now(),
+                    record_id,
+                ),
+            )
+            updated = connection.execute(
+                "SELECT * FROM debate_intelligence WHERE id = ?", (record_id,)
+            ).fetchone()
+            return self._intelligence_row_to_dict(updated)
+
     def add_agent_experience(
         self,
         *,
@@ -1427,7 +1490,10 @@ class Database:
                 return False
 
             now = utc_now()
+            connection.execute("DELETE FROM post_debate_feedback WHERE session_id = ?", (session_id,))
+            connection.execute("DELETE FROM debate_intelligence WHERE session_id = ?", (session_id,))
             connection.execute("DELETE FROM debates WHERE session_id = ?", (session_id,))
+            connection.execute("DELETE FROM messages WHERE session_id = ?", (session_id,))
             connection.execute("DELETE FROM agent_experience WHERE scope = 'chat' AND session_id = ?", (session_id,))
             connection.execute(
                 "UPDATE sessions SET updated_at = ? WHERE id = ?", (now, session_id)

@@ -30,6 +30,10 @@ class CouncilSettingsUpdate(BaseModel):
     default_judge_mode: str | None = None
 
 
+class ResetAgentExperienceRequest(BaseModel):
+    confirmation: str = Field(min_length=1, max_length=120)
+
+
 class FeedbackRequest(BaseModel):
     question_key: str = Field(min_length=1, max_length=80)
     answer: str = Field(min_length=1, max_length=1200)

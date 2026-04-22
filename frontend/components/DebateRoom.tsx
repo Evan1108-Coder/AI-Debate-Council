@@ -86,7 +86,7 @@ const panels: Array<{ id: RoomPanel; label: string }> = [
   { id: "settings", label: "Chat Settings" }
 ];
 
-const costCurrencies = ["USD", "CNY", "HKD", "EUR", "JPY", "GBP", "AUD", "CAD", "SGP"];
+const costCurrencies = ["USD", "CNY", "HKD", "EUR", "JPY", "GBP", "AUD", "CAD", "SGD"];
 const USER_INPUT_WARN_CHARS = 5000;
 const USER_INPUT_MAX_CHARS = 5500;
 
@@ -335,9 +335,14 @@ export function DebateRoom({
 
           {activePanel === "settings" ? (
             <SettingsPanel
+              key={selectedSession?.id ?? "no-session"}
               session={selectedSession}
               settings={settings}
               models={models}
+              messages={messages}
+              analytics={analytics}
+              intelligence={intelligence}
+              selectedDebateId={selectedDebateId}
               selectedModelName={selectedModelName}
               isRenaming={renamingSessionId === selectedSession?.id}
               isRunning={isRunning}
@@ -363,18 +368,25 @@ function ProviderReadiness({ models }: { models: ModelsResponse | null }) {
       {models?.providers.map((provider) => (
         <div
           key={provider.provider}
-          className="flex items-center justify-between gap-3 rounded-md border border-zinc-300 bg-[#fbfcfb] px-3 py-2"
+          className="rounded-md border border-zinc-300 bg-[#fbfcfb] px-3 py-2"
         >
-          <span className="truncate text-sm font-medium text-zinc-900">
-            {provider.provider_label}
-          </span>
-          <span
-            className={`shrink-0 rounded px-2 py-1 text-xs font-semibold ${
-              provider.configured ? "bg-emerald-100 text-emerald-800" : "bg-zinc-200 text-zinc-700"
-            }`}
-          >
-            {provider.configured ? `${provider.unlocked_model_count} unlocked` : provider.api_key_env}
-          </span>
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <span className="text-sm font-medium text-zinc-900">{provider.provider_label}</span>
+            <span
+              className={`rounded px-2 py-1 text-xs font-semibold ${
+                provider.configured
+                  ? "bg-emerald-100 text-emerald-800"
+                  : provider.status_label === "Unavailable"
+                    ? "bg-amber-100 text-amber-800"
+                    : "bg-zinc-200 text-zinc-700"
+              }`}
+            >
+              {provider.status_label ?? (provider.configured ? `${provider.unlocked_model_count} unlocked` : provider.api_key_env)}
+            </span>
+          </div>
+          {provider.status_reason && provider.status_label === "Unavailable" ? (
+            <p className="mt-2 text-xs leading-5 text-zinc-600">{provider.status_reason}</p>
+          ) : null}
         </div>
       ))}
     </div>
@@ -439,68 +451,77 @@ function Composer({
             {error}
           </p>
         ) : null}
-        <div className="mb-3 grid gap-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
-          <div>
-            <label htmlFor="model" className="mb-2 block text-sm font-medium text-zinc-900">
-              Overall Model
-            </label>
-            <select
-              id="model"
-              value={selectedModelName}
-              onChange={(event) => onModelChange(event.target.value)}
-              disabled={unlockedModels.length === 0 || isRunning}
-              className="h-12 w-full rounded-md border border-zinc-300 bg-white px-3 text-zinc-950 disabled:cursor-not-allowed disabled:bg-zinc-100 disabled:text-zinc-500"
-            >
-              {unlockedModels.length === 0 ? <option value="">No unlocked models</option> : null}
-              {Object.entries(modelsByProvider).map(([provider, providerModels]) => (
-                <optgroup key={provider} label={provider}>
-                  {providerModels.map((model) => (
-                    <option key={model.name} value={model.name}>
-                      {model.name}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
-          </div>
-          <p className="text-sm text-zinc-600 md:max-w-xs">
-            The router decides whether this is a normal chat or a debate.
+        {models?.availability_notice ? (
+          <p className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            {models.availability_notice}
           </p>
-        </div>
-        <label htmlFor="topic" className="mb-2 block text-sm font-medium text-zinc-900">
-          Message
-        </label>
-        <div className="flex flex-col gap-3 md:flex-row">
-          <textarea
-            id="topic"
-            value={topic}
-            onChange={(event) => onTopicChange(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
-                event.preventDefault();
-                if (canSend) {
-                  onSend();
-                }
-              }
-            }}
-            placeholder="Say hello, ask a follow-up, or ask the council to debate a topic."
-            rows={3}
-            className="min-h-24 flex-1 resize-none rounded-md border border-zinc-300 bg-white px-3 py-3 text-zinc-950 placeholder:text-zinc-500"
-          />
-          <button
-            type="button"
-            onClick={onSend}
-            disabled={!canSend}
-            className="h-12 rounded-md bg-emerald-700 px-5 py-3 font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-zinc-400 md:h-auto"
-          >
-            {isRunning ? "Working" : "Send"}
-          </button>
+        ) : null}
+        <div className="grid gap-4 xl:grid-cols-[240px_minmax(0,1fr)] xl:items-start">
+          <div className="space-y-2">
+            <div>
+              <label htmlFor="model" className="mb-2 block text-sm font-medium text-zinc-900">
+                Overall Model
+              </label>
+              <select
+                id="model"
+                value={selectedModelName}
+                onChange={(event) => onModelChange(event.target.value)}
+                disabled={unlockedModels.length === 0 || isRunning}
+                className="h-12 w-full rounded-md border border-zinc-300 bg-white px-3 text-zinc-950 disabled:cursor-not-allowed disabled:bg-zinc-100 disabled:text-zinc-500"
+              >
+                {unlockedModels.length === 0 ? <option value="">No verified models</option> : null}
+                {Object.entries(modelsByProvider).map(([provider, providerModels]) => (
+                  <optgroup key={provider} label={provider}>
+                    {providerModels.map((model) => (
+                      <option key={model.name} value={model.name}>
+                        {model.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                ))}
+              </select>
+            </div>
+            <p className="text-sm leading-6 text-zinc-600">
+              The router decides whether this is a normal chat or a debate.
+            </p>
+          </div>
+          <div>
+            <label htmlFor="topic" className="mb-2 block text-sm font-medium text-zinc-900">
+              Message
+            </label>
+            <div className="flex flex-col gap-3 md:flex-row">
+              <textarea
+                id="topic"
+                value={topic}
+                onChange={(event) => onTopicChange(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                    event.preventDefault();
+                    if (canSend) {
+                      onSend();
+                    }
+                  }
+                }}
+                placeholder="Say hello, ask a follow-up, or ask the council to debate a topic."
+                rows={3}
+                className="min-h-24 flex-1 resize-none rounded-md border border-zinc-300 bg-white px-3 py-3 text-zinc-950 placeholder:text-zinc-500"
+              />
+              <button
+                type="button"
+                onClick={onSend}
+                disabled={!canSend}
+                className="h-12 rounded-md bg-emerald-700 px-5 py-3 font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-zinc-400 md:h-auto"
+              >
+                {isRunning ? "Working" : "Send"}
+              </button>
+            </div>
+          </div>
         </div>
         <div className="mt-2 flex flex-col gap-1 sm:flex-row sm:items-center sm:justify-between">
           <p className="text-sm text-zinc-600">
             {models?.mock_mode
               ? "Mock responses are enabled."
-              : `${models?.available_model_count ?? 0} unlocked model(s). One is required.`}
+              : `${models?.available_model_count ?? 0} verified model(s). One is required.`}
           </p>
           <p
             className={`text-sm ${overHardLimit ? "font-semibold text-red-700" : nearLimit ? "text-amber-700" : "text-zinc-500"}`}
@@ -732,13 +753,11 @@ function StatsPanel({
           </Panel>
           <Panel title="Role weights">
             {Object.entries(analytics.mixture_of_experts.role_weights).map(([role, value]) => (
-              <Bar key={role} label={role.replace("_", " ")} value={value} />
+              <Bar key={role} label={formatAgentLabel(role)} value={value} />
             ))}
           </Panel>
           <Panel title="Stance votes">
-            {Object.entries(analytics.ensemble.weighted_votes).map(([label, value]) => (
-              <Bar key={label} label={label} value={value / maxVote(analytics)} />
-            ))}
+            <StanceVotesChart analytics={analytics} />
           </Panel>
         </div>
 
@@ -834,7 +853,7 @@ function PhasePanel({ phase }: { phase: NonNullable<DebateAnalytics["phase"]> })
   const width = phase.total > 0 ? `${Math.round((completed / phase.total) * 100)}%` : "0%";
   return (
     <Panel title="Phase">
-      <div className="grid gap-3 lg:grid-cols-[1fr_2fr]">
+      <div className="grid gap-4 pb-1 lg:grid-cols-[1fr_2fr]">
         <div className="space-y-2 text-sm text-zinc-700">
           <p className="font-semibold text-zinc-950">{phase.flow_name}</p>
           <p>{phase.pro_position}</p>
@@ -893,6 +912,20 @@ function WinRateChart({
         {data.resolved} resolved winner(s) from {data.total_completed} completed debate(s).
         {data.unclear > 0 ? ` ${data.unclear} verdict(s) were unclear.` : ""}
       </p>
+    </div>
+  );
+}
+
+function StanceVotesChart({ analytics }: { analytics: DebateAnalytics }) {
+  const total = Math.max(
+    0.001,
+    Object.values(analytics.ensemble.weighted_votes).reduce((sum, value) => sum + value, 0)
+  );
+  return (
+    <div>
+      {Object.entries(analytics.ensemble.weighted_votes).map(([label, value]) => (
+        <Bar key={label} label={label} value={value / total} />
+      ))}
     </div>
   );
 }
@@ -1540,6 +1573,10 @@ function SettingsPanel({
   session,
   settings,
   models,
+  messages,
+  analytics,
+  intelligence,
+  selectedDebateId,
   selectedModelName,
   isRenaming,
   isRunning,
@@ -1555,6 +1592,10 @@ function SettingsPanel({
   session: ChatSession | null;
   settings: SessionSettings | null;
   models: ModelsResponse | null;
+  messages: DebateMessage[];
+  analytics: DebateAnalytics | null;
+  intelligence: DebateIntelligence | null;
+  selectedDebateId: string;
   selectedModelName: string;
   isRenaming: boolean;
   isRunning: boolean;
@@ -1611,6 +1652,56 @@ function SettingsPanel({
         [roleKey]: { ...currentAgent, ...updates }
       }
     });
+  };
+
+  const handleExport = () => {
+    const debate = debates.find((item) => item.id === selectedDebateId) ?? debates[0] ?? null;
+    const scopedMessages = debate
+      ? messages.filter((message) => message.debate_id === debate.id)
+      : messages;
+    const payload = {
+      exported_at: new Date().toISOString(),
+      chat: session,
+      debate,
+      settings: {
+        export_format: settings.export_format,
+        debate_tone: settings.debate_tone,
+        language: settings.language,
+        judge_mode: settings.judge_mode,
+        evidence_strictness: settings.evidence_strictness
+      },
+      analytics,
+      intelligence: intelligence
+        ? {
+            claims: intelligence.claims,
+            challenges: intelligence.challenges,
+            evidence: intelligence.evidence,
+            scorecards: intelligence.scorecards,
+            values: intelligence.values,
+            reviews: intelligence.reviews
+          }
+        : null,
+      messages: scopedMessages
+    };
+    const format = settings.export_format;
+    if (format === "JSON") {
+      downloadTextFile(
+        `${safeFileStem(session.name)}-${debate ? safeFileStem(debate.name) : "chat"}.json`,
+        JSON.stringify(payload, null, 2),
+        "application/json"
+      );
+      return;
+    }
+    const markdown = exportAsMarkdown(payload);
+    if (format === "PDF") {
+      exportPrintablePdf(markdown, `${session.name}${debate ? ` - ${debate.name}` : ""}`);
+      return;
+    }
+    downloadTextFile(
+      `${safeFileStem(session.name)}-${debate ? safeFileStem(debate.name) : "chat"}.md`,
+      markdown,
+      "text/markdown"
+    );
   };
 
   const visibleTeamRoles = teamRoleSettings.filter(
@@ -1961,8 +2052,19 @@ function SettingsPanel({
               onChange={(value) => onSettingsChange({ fact_check_mode: value })}
             />
           </div>
+          <div className="mt-3">
+            <button
+              type="button"
+              onClick={handleExport}
+              className="rounded-md border border-zinc-300 px-4 py-2 text-sm font-semibold text-zinc-800 hover:bg-zinc-100"
+            >
+              Export Current Debate
+            </button>
+          </div>
           <p className="mt-3 text-sm text-zinc-600">
             Fact-check mode is saved as a chat setting and reserved for provider/tool integration.
+            Export uses the selected format: Markdown downloads directly, JSON downloads structured data,
+            and PDF opens a print dialog you can save as PDF.
           </p>
         </Panel>
       </div>
@@ -1973,7 +2075,7 @@ function SettingsPanel({
 function Panel({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="rounded-md border border-zinc-300 bg-white p-4">
-      <h3 className="mb-3 text-sm font-semibold uppercase text-zinc-500">{title}</h3>
+      <h3 className="mb-4 text-sm font-semibold uppercase text-zinc-500">{title}</h3>
       {children}
     </section>
   );
@@ -2272,6 +2374,7 @@ function LineChart({ history }: { history: DebateAnalytics[] }) {
   const width = 620;
   const height = 220;
   const pad = 28;
+  const latest = history[history.length - 1];
 
   const pathFor = (label: (typeof labels)[number]) =>
     history
@@ -2325,9 +2428,9 @@ function LineChart({ history }: { history: DebateAnalytics[] }) {
         ))}
       </svg>
       <div className="flex gap-4 text-xs">
-        <Legend color="bg-emerald-700" label="Support" value={0} />
-        <Legend color="bg-red-600" label="Oppose" value={0} />
-        <Legend color="bg-cyan-700" label="Mixed" value={0} />
+        <Legend color="bg-emerald-700" label="Support" value={Math.round((latest?.bayesian.probabilities.support ?? 0) * 100)} />
+        <Legend color="bg-red-600" label="Oppose" value={Math.round((latest?.bayesian.probabilities.oppose ?? 0) * 100)} />
+        <Legend color="bg-cyan-700" label="Mixed" value={Math.round((latest?.bayesian.probabilities.mixed ?? 0) * 100)} />
       </div>
     </div>
   );
@@ -2541,20 +2644,40 @@ function MarkdownText({ text }: { text: string }) {
 }
 
 function renderInline(text: string) {
-  const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g);
-  return parts.map((part, index) => {
-    if (part.startsWith("**") && part.endsWith("**")) {
-      return <strong key={index}>{part.slice(2, -2)}</strong>;
+  const segments: ReactNode[] = [];
+  const pattern = /(\*\*.+?\*\*|\*(?!\s)[^*].+?\*)/g;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+  let index = 0;
+  while ((match = pattern.exec(text)) !== null) {
+    if (match.index > lastIndex) {
+      segments.push(text.slice(lastIndex, match.index));
     }
-    if (part.startsWith("*") && part.endsWith("*")) {
-      return <em key={index}>{part.slice(1, -1)}</em>;
+    const value = match[0];
+    if (value.startsWith("**") && value.endsWith("**")) {
+      segments.push(<strong key={`strong-${index}`}>{value.slice(2, -2)}</strong>);
+    } else if (value.startsWith("*") && value.endsWith("*")) {
+      segments.push(<em key={`em-${index}`}>{value.slice(1, -1)}</em>);
+    } else {
+      segments.push(value);
     }
-    return part;
-  });
+    lastIndex = match.index + value.length;
+    index += 1;
+  }
+  if (lastIndex < text.length) {
+    segments.push(text.slice(lastIndex));
+  }
+  return segments.length > 0 ? segments : text;
 }
 
 function estimateTokens(text: string) {
-  return Math.ceil(text.trim().split(/\s+/).filter(Boolean).length * 1.3);
+  if (!text.trim()) {
+    return 0;
+  }
+  const cjkChars = (text.match(/[\u3400-\u9fff\uf900-\ufaff]/g) ?? []).length;
+  const withoutCjk = text.replace(/[\u3400-\u9fff\uf900-\ufaff]/g, " ");
+  const wordish = (withoutCjk.match(/[A-Za-z0-9_]+|[^\sA-Za-z0-9_]/g) ?? []).length;
+  return Math.max(1, Math.ceil(cjkChars * 1.6 + wordish * 1.3));
 }
 
 function formatCost(value: number, currency: string) {
@@ -2567,10 +2690,11 @@ function formatCost(value: number, currency: string) {
     GBP: "£",
     AUD: "A$",
     CAD: "C$",
-    SGP: "S$"
+    SGD: "S$"
   };
-  const normalized = currency in symbols ? currency : "USD";
-  const decimals = normalized === "JPY" ? 4 : 6;
+  const raw = (currency || "USD").toUpperCase();
+  const normalized = raw === "SGP" ? "SGD" : raw in symbols ? raw : "USD";
+  const decimals = normalized === "JPY" ? 0 : 6;
   return `${symbols[normalized]}${Number(value || 0).toFixed(decimals)} ${normalized}`;
 }
 
@@ -2581,8 +2705,106 @@ function formatDuration(seconds: number) {
   return `${seconds.toFixed(1)} sec`;
 }
 
-function maxVote(analytics: DebateAnalytics) {
-  return Math.max(0.001, ...Object.values(analytics.ensemble.weighted_votes));
+function safeFileStem(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    || "debate-export";
+}
+
+function downloadTextFile(filename: string, content: string, mimeType: string) {
+  const blob = new Blob([content], { type: `${mimeType};charset=utf-8` });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+function exportPrintablePdf(markdown: string, title: string) {
+  const printWindow = window.open("", "_blank", "noopener,noreferrer,width=960,height=720");
+  if (!printWindow) {
+    return;
+  }
+  const html = `
+    <!doctype html>
+    <html>
+      <head>
+        <meta charset="utf-8" />
+        <title>${escapeHtml(title)}</title>
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; padding: 32px; color: #18181b; }
+          pre { white-space: pre-wrap; word-break: break-word; }
+        </style>
+      </head>
+      <body>
+        <h1>${escapeHtml(title)}</h1>
+        <pre>${escapeHtml(markdown)}</pre>
+      </body>
+    </html>
+  `;
+  printWindow.document.open();
+  printWindow.document.write(html);
+  printWindow.document.close();
+  printWindow.focus();
+  printWindow.print();
+}
+
+function escapeHtml(value: string) {
+  return value
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+function exportAsMarkdown(payload: {
+  exported_at: string;
+  chat: ChatSession;
+  debate: DebateRecord | null;
+  settings: Record<string, unknown>;
+  analytics: DebateAnalytics | null;
+  intelligence: Record<string, unknown> | null;
+  messages: DebateMessage[];
+}) {
+  const lines = [
+    `# ${payload.chat.name}`,
+    "",
+    `Exported at: ${payload.exported_at}`,
+    `Debate: ${payload.debate?.name ?? "Current chat"}`,
+    `Topic: ${payload.debate?.topic ?? "N/A"}`,
+    "",
+    "## Settings",
+    "```json",
+    JSON.stringify(payload.settings, null, 2),
+    "```",
+    "",
+    "## Messages",
+  ];
+  payload.messages.forEach((message) => {
+    lines.push(
+      `### ${message.speaker} (${message.role})`,
+      "",
+      message.content,
+      ""
+    );
+  });
+  if (payload.analytics) {
+    lines.push("## Analytics", "```json", JSON.stringify(payload.analytics, null, 2), "```", "");
+  }
+  if (payload.intelligence) {
+    lines.push(
+      "## Debate Intelligence",
+      "```json",
+      JSON.stringify(payload.intelligence, null, 2),
+      "```",
+      ""
+    );
+  }
+  return lines.join("\n");
 }
 
 function toPercent(value: number) {

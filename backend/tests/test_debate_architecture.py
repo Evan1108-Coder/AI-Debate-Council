@@ -181,11 +181,13 @@ class DebateArchitectureTests(unittest.TestCase):
             transcript,
             settings,
             self.manager._agent_generation_settings(settings, agent["archetype"]),
+            MOCK_MODEL,
         )
         prompt_text = "\n".join(message["content"] for message in messages)
 
         self.assertIn("Pro Advocate, you said", prompt_text)
         self.assertIn('do not say "my opponent"', prompt_text.lower())
+        self.assertIn("ORIGINAL TOPIC:", prompt_text)
 
     def test_context_slice_caps_turn_count_and_content_size(self) -> None:
         transcript = [
@@ -203,6 +205,139 @@ class DebateArchitectureTests(unittest.TestCase):
         self.assertLessEqual(len(sliced), 24)
         self.assertTrue(all(len(turn["content"]) <= 1203 for turn in sliced))
 
+    def test_transcript_for_model_keeps_topic_relevant_turns_even_if_older(self) -> None:
+        transcript = [
+            {
+                "speaker": "Pro Advocate",
+                "role": "pro_lead_advocate",
+                "model": "mock-model",
+                "content": "The real question is whether schools should ban phones in class because constant notifications disrupt learning and split attention.",
+            },
+            {
+                "speaker": "Con Advocate",
+                "role": "con_lead_advocate",
+                "model": "mock-model",
+                "content": "We started talking about cafeteria uniforms and hallway paint colors instead of the phone policy.",
+            },
+            {
+                "speaker": "Pro Advocate",
+                "role": "pro_lead_advocate",
+                "model": "mock-model",
+                "content": "The hallway color tangent still does not answer the phone-ban question.",
+            },
+            {
+                "speaker": "Con Advocate",
+                "role": "con_lead_advocate",
+                "model": "mock-model",
+                "content": "Now we are mostly arguing about school mascots and assemblies.",
+            },
+        ]
+
+        selected = self.manager._transcript_for_model(
+            transcript,
+            model_name=MOCK_MODEL.name,
+            reserve_tokens=1600,
+            hard_turn_cap=8,
+            topic="Should schools ban phones in class?",
+        )
+        selected_text = "\n".join(turn["content"] for turn in selected)
+
+        self.assertIn("ban phones in class", selected_text.lower())
+
+    def test_topic_anchor_warns_when_recent_turns_drift(self) -> None:
+        transcript = [
+            {
+                "speaker": "Pro Advocate",
+                "role": "pro_lead_advocate",
+                "model": "mock-model",
+                "content": "Should cities ban private cars from downtown cores because congestion and emissions remain high?",
+            },
+            {
+                "speaker": "Con Advocate",
+                "role": "con_lead_advocate",
+                "model": "mock-model",
+                "content": "The conversation veered into weather, mascots, cooking recipes, and random side stories.",
+            },
+            {
+                "speaker": "Pro Advocate",
+                "role": "pro_lead_advocate",
+                "model": "mock-model",
+                "content": "We still are drifting into costume colors, cafeteria menus, and unrelated scheduling details.",
+            },
+            {
+                "speaker": "Con Advocate",
+                "role": "con_lead_advocate",
+                "model": "mock-model",
+                "content": "The latest exchange keeps drifting into background details about mascots, lunch, and school festivals.",
+            },
+            {
+                "speaker": "Pro Advocate",
+                "role": "pro_lead_advocate",
+                "model": "mock-model",
+                "content": "Now the room is talking about paint samples, uniforms, and unrelated logistics instead of the core issue.",
+            },
+            {
+                "speaker": "Con Advocate",
+                "role": "con_lead_advocate",
+                "model": "mock-model",
+                "content": "The newest turns are still about weather, costumes, and festival planning rather than the policy question.",
+            },
+        ]
+
+        anchor = self.manager._topic_anchor_text(
+            "Should cities ban private cars from downtown cores?",
+            transcript=transcript,
+        )
+
+        self.assertIn("ORIGINAL TOPIC:", anchor)
+        self.assertIn("Refocus on the original question", anchor)
+
+    def test_debate_positions_handle_colon_and_simple_or_topics(self) -> None:
+        positions = self.manager.debate_positions("Debate: Should we eat ice cream in morning or afternoon?")
+        self.assertIn("morning", positions["pro"].lower())
+        self.assertIn("afternoon", positions["con"].lower())
+        self.assertNotIn("should should", positions["pro"].lower())
+
+        simple = self.manager.debate_positions("cats or dogs in apartments")
+        self.assertIn("cats", simple["pro"].lower())
+        self.assertIn("dogs", simple["con"].lower())
+
+    def test_challenges_can_be_marked_answered(self) -> None:
+        session = self.db.create_session(max_sessions=10)
+        debate = self.db.create_debate(session["id"], "Should schools ban phones?")
+        settings = self.db.get_session_settings(session["id"])
+        pro_agent = next(
+            item for item in self.manager._active_debate_agents(settings) if item["role"] == "pro_lead_advocate"
+        )
+        con_agent = next(
+            item for item in self.manager._active_debate_agents(settings) if item["role"] == "con_lead_advocate"
+        )
+        pro_phase = {"key": "pro_open", "title": "Pro Open", "kind": "constructive"}
+        con_phase = {"key": "con_reply", "title": "Con Reply", "kind": "answer_rebuttal"}
+
+        self.manager._capture_turn_intelligence(
+            session_id=session["id"],
+            debate_id=debate["id"],
+            agent=pro_agent,
+            phase=pro_phase,
+            content="If phones stay in class, how do you stop constant distraction and unfair attention splits?",
+        )
+        self.manager._capture_turn_intelligence(
+            session_id=session["id"],
+            debate_id=debate["id"],
+            agent=con_agent,
+            phase=con_phase,
+            content="To answer your distraction point directly, schools can use locked pouches and teacher enforcement without a total ban.",
+        )
+
+        challenges = [
+            record
+            for record in self.db.list_intelligence_records(session["id"], debate["id"])
+            if record["record_type"] == "challenge"
+        ]
+        self.assertTrue(challenges)
+        self.assertIn(challenges[0]["status"], {"Answered", "Partially answered"})
+
     def test_streaming_sanitizer_preserves_chunk_boundary_spaces(self) -> None:
         sanitizer = StreamingSanitizer()
 
@@ -211,6 +346,14 @@ class DebateArchitectureTests(unittest.TestCase):
         content += sanitizer.flush()
 
         self.assertEqual(content, "Denying oneself")
+
+    def test_judge_summary_is_normalized_with_clear_winner_prefix(self) -> None:
+        summary = self.manager._normalize_judge_summary(
+            "The Pro Advocate's stance on remote work is the winning position because it answered the cost objection more directly.",
+            "Should remote work be the default?",
+        )
+
+        self.assertTrue(summary.startswith("WINNER: Pro\nReason:"))
 
     def test_mock_stream_treats_closed_websocket_as_client_disconnect(self) -> None:
         class ClosedSocket:

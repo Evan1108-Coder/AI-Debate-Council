@@ -28,7 +28,8 @@ class CostingTests(unittest.TestCase):
 
     def test_estimate_tokens_and_currency_normalization(self) -> None:
         self.assertGreaterEqual(estimate_tokens("Denying oneself"), 2)
-        self.assertEqual(normalize_currency("sgp"), "SGP")
+        self.assertGreaterEqual(estimate_tokens("我们应该这样做，因为数据更清楚。"), 6)
+        self.assertEqual(normalize_currency("sgp"), "SGD")
         self.assertEqual(normalize_currency("bad"), "USD")
 
 

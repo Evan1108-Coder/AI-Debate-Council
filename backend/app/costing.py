@@ -7,7 +7,7 @@ import re
 from typing import Any
 
 
-SUPPORTED_CURRENCIES = ("USD", "CNY", "HKD", "EUR", "JPY", "GBP", "AUD", "CAD", "SGP")
+SUPPORTED_CURRENCIES = ("USD", "CNY", "HKD", "EUR", "JPY", "GBP", "AUD", "CAD", "SGD")
 
 # Fallback exchange rates relative to 1 USD. Kept local to avoid adding a fragile
 # runtime currency dependency to the setup path.
@@ -20,7 +20,7 @@ EXCHANGE_RATES_PER_USD = {
     "GBP": 0.79,
     "AUD": 1.52,
     "CAD": 1.36,
-    "SGP": 1.35,
+    "SGD": 1.35,
 }
 
 # Prices are USD per 1M input/output tokens for normal pay-as-you-go text use.
@@ -147,6 +147,8 @@ class CostTracker:
 
 def normalize_currency(currency: str) -> str:
     cleaned = str(currency or "USD").upper().strip()
+    if cleaned == "SGP":
+        cleaned = "SGD"
     return cleaned if cleaned in SUPPORTED_CURRENCIES else "USD"
 
 

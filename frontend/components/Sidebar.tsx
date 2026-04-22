@@ -26,11 +26,14 @@ export function Sidebar({
   return (
     <aside className="flex h-full w-full flex-col border-r border-zinc-300 bg-white md:w-80">
       <div className="border-b border-zinc-300 p-4">
-        <img
-          src="https://images.unsplash.com/photo-1521737604893-d14cc237f11d?auto=format&fit=crop&w=640&q=80"
-          alt=""
-          className="mb-3 h-24 w-full rounded-md object-cover"
-        />
+        <div className="mb-3 rounded-md border border-zinc-300 bg-zinc-50 p-4">
+          <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
+            Council Room
+          </p>
+          <p className="mt-2 text-sm leading-6 text-zinc-700">
+            Structured debate, tracked evidence, and team memory in one shared workspace.
+          </p>
+        </div>
         <div className="flex items-center justify-between gap-3">
           <div>
             <h1 className="text-lg font-semibold text-zinc-950">AI Debate Council</h1>
@@ -90,7 +93,9 @@ export function Sidebar({
           }`}
         >
           <span>Council Settings</span>
-          <span aria-hidden="true">⚙</span>
+          <span aria-hidden="true" className="text-xl leading-none">
+            ⚙
+          </span>
         </button>
       </div>
     </aside>

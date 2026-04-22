@@ -9,6 +9,39 @@ from urllib.parse import urlparse
 
 
 STANCE_LABELS = ("support", "oppose", "mixed")
+SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?。！？])\s+")
+PRO_WIN_ALIASES = (
+    "pro",
+    "pro team",
+    "pro advocate",
+    "affirmative",
+    "supporting side",
+    "supporting team",
+    "in favor",
+)
+CON_WIN_ALIASES = (
+    "con",
+    "con team",
+    "con advocate",
+    "negative",
+    "opposing side",
+    "opposing team",
+    "against",
+    "skeptical",
+)
+WIN_SIGNAL_PATTERNS = (
+    r"\bwin(?:s|ning|ner)?\b",
+    r"\bverdict\b",
+    r"\bprevail(?:s|ed)?\b",
+    r"\bedges?\s+out\b",
+    r"\bstronger\s+case\b",
+    r"\bbetter\s+case\b",
+    r"\bwinning\s+position\b",
+    r"\btakes?\s+the\s+debate\b",
+    r"\bcomes?\s+out\s+ahead\b",
+    r"\bi\s+side\s+with\b",
+    r"\bfavors?\b",
+)
 ROLE_STANCE_BIAS = {
     "advocate": "support",
     "critic": "oppose",
@@ -284,31 +317,33 @@ def _win_rate_by_team(debates: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _infer_debate_winner(summary: str) -> str:
-    text = summary.lower()
-    winner_slice = text
-    winner_match = re.search(r"(clear\s+winner|winner|verdict|wins?)[:\s-]+(.{0,180})", text)
-    if winner_match:
-        winner_slice = winner_match.group(2)
-    pro_markers = (
-        "pro",
-        "affirmative",
-        "support",
-        "supporting side",
-        "in favor",
-    )
-    con_markers = (
-        "con",
-        "negative",
-        "oppose",
-        "opposing side",
-        "against",
-        "skeptical",
-    )
-    pro_hit = any(re.search(rf"\b{re.escape(marker)}\b", winner_slice) for marker in pro_markers)
-    con_hit = any(re.search(rf"\b{re.escape(marker)}\b", winner_slice) for marker in con_markers)
-    if pro_hit and not con_hit:
+    normalized = _normalize_winner_text(summary)
+    if not normalized:
+        return "unclear"
+    sentences = [
+        sentence.strip()
+        for sentence in re.split(r"(?<=[.!?。！？])\s+|\n+", normalized)
+        if sentence.strip()
+    ]
+    candidate_sentences = [
+        sentence
+        for sentence in sentences
+        if any(re.search(pattern, sentence) for pattern in WIN_SIGNAL_PATTERNS)
+    ] or sentences[-3:]
+    for sentence in candidate_sentences:
+        pro_hit = _contains_any_alias(sentence, PRO_WIN_ALIASES)
+        con_hit = _contains_any_alias(sentence, CON_WIN_ALIASES)
+        if pro_hit and not con_hit:
+            return "pro"
+        if con_hit and not pro_hit:
+            return "con"
+    if _contains_any_alias(normalized, PRO_WIN_ALIASES) and not _contains_any_alias(
+        normalized, CON_WIN_ALIASES
+    ):
         return "pro"
-    if con_hit and not pro_hit:
+    if _contains_any_alias(normalized, CON_WIN_ALIASES) and not _contains_any_alias(
+        normalized, PRO_WIN_ALIASES
+    ):
         return "con"
     return "unclear"
 
@@ -350,7 +385,7 @@ def _phase_cost_label(message: dict[str, Any]) -> str:
         return "Discussion"
     if kind == "closing":
         return "Closing"
-    return "Judgment" if role in {"judge", "judge_assistant"} else "Constructive"
+    return "Constructive"
 
 
 def _debate_durations(debates: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -508,17 +543,31 @@ def _analyze_turn(topic: str, turn: dict[str, Any], previous_turns: list[dict[st
 def _sentences(content: str) -> list[str]:
     return [
         sentence.strip()
-        for sentence in re.split(r"(?<=[.!?])\s+", content)
+        for sentence in re.findall(r"[^.!?。！？]+[.!?。！？]?", content)
         if sentence.strip()
     ]
 
 
 def _extract_claims(sentences: list[str]) -> list[str]:
     claims = []
-    claim_markers = ("should", "is", "are", "will", "must", "means", "causes", "creates")
+    claim_markers = (
+        "should",
+        "is",
+        "are",
+        "will",
+        "must",
+        "means",
+        "causes",
+        "creates",
+        "应该",
+        "必须",
+        "意味着",
+        "造成",
+        "会",
+    )
     for sentence in sentences:
         lower = sentence.lower()
-        if any(marker in lower.split() for marker in claim_markers) or len(claims) == 0:
+        if any(_sentence_contains_marker(lower, sentence, marker) for marker in claim_markers) or len(claims) == 0:
             claims.append(_clip(sentence))
         if len(claims) == 3:
             break
@@ -528,23 +577,23 @@ def _extract_claims(sentences: list[str]) -> list[str]:
 def _extract_by_markers(sentences: list[str], markers: set[str]) -> list[str]:
     matches = []
     for sentence in sentences:
-        words = set(_tokens(sentence))
-        if words & markers:
+        lower = sentence.lower()
+        if any(_sentence_contains_marker(lower, sentence, marker) for marker in markers):
             matches.append(_clip(sentence))
     return matches[:3]
 
 
 def _detect_stance(content: str, role: str) -> str:
+    if role.startswith("pro_"):
+        return "support"
+    if role.startswith("con_"):
+        return "oppose"
     words = _tokens(content)
     counts = {
         "support": sum(1 for word in words if word in SUPPORT_TERMS),
         "oppose": sum(1 for word in words if word in OPPOSE_TERMS),
         "mixed": sum(1 for word in words if word in MIXED_TERMS),
     }
-    if role.startswith("pro_"):
-        counts["support"] += 1.8
-    if role.startswith("con_"):
-        counts["oppose"] += 1.8
     archetype = role.removeprefix("pro_").removeprefix("con_")
     biased_label = ROLE_STANCE_BIAS.get(role) or ROLE_STANCE_BIAS.get(archetype)
     if biased_label:
@@ -665,7 +714,7 @@ def _attention_terms(topic: str, transcript: list[dict[str, Any]]) -> list[str]:
     counter: Counter[str] = Counter()
     for turn in transcript:
         for token in _tokens(str(turn.get("content", ""))):
-            if token not in STOPWORDS and len(token) > 3:
+            if token not in STOPWORDS and (len(token) > 3 or _is_cjk_token(token)):
                 counter[token] += 2 if token in topic_tokens else 1
     return [token for token, _count in counter.most_common(8)]
 
@@ -770,7 +819,31 @@ def _disagreement_pressure(weighted_votes: dict[str, float]) -> float:
 
 
 def _tokens(text: str) -> list[str]:
-    return re.findall(r"[a-zA-Z][a-zA-Z0-9']+", text.lower())
+    lowered = text.lower()
+    latin_tokens = re.findall(r"[a-zA-Z][a-zA-Z0-9']*", lowered)
+    number_tokens = re.findall(r"\d+(?:\.\d+)?", lowered)
+    cjk_tokens = re.findall(r"[\u3400-\u9fff\uf900-\ufaff]", text)
+    return [*latin_tokens, *number_tokens, *cjk_tokens]
+
+
+def _sentence_contains_marker(lowered: str, original: str, marker: str) -> bool:
+    if re.search(r"[A-Za-z]", marker):
+        return marker in lowered.split() or re.search(rf"\b{re.escape(marker)}\b", lowered) is not None
+    return marker in original
+
+
+def _normalize_winner_text(text: str) -> str:
+    normalized = text.lower().replace("’", "'")
+    normalized = re.sub(r"\s+", " ", normalized)
+    return normalized.strip()
+
+
+def _contains_any_alias(text: str, aliases: tuple[str, ...]) -> bool:
+    return any(re.search(rf"\b{re.escape(alias)}\b", text) for alias in aliases)
+
+
+def _is_cjk_token(token: str) -> bool:
+    return bool(re.fullmatch(r"[\u3400-\u9fff\uf900-\ufaff]", token))
 
 
 def _jaccard(left: set[str] | list[str], right: set[str] | list[str]) -> float:

@@ -1,7 +1,7 @@
 import unittest
 import json
 
-from backend.app.analytics import analyze_debate, format_analytics_report
+from backend.app.analytics import _infer_debate_winner, analyze_debate, format_analytics_report
 
 
 class DebateAnalyticsTests(unittest.TestCase):
@@ -131,6 +131,41 @@ class DebateAnalyticsTests(unittest.TestCase):
         )
 
         json.dumps(analysis["argument_graph"])
+
+    def test_winner_detection_handles_natural_judge_phrasing(self) -> None:
+        self.assertEqual(
+            _infer_debate_winner("The Pro Advocate's stance on remote work is the winning position."),
+            "pro",
+        )
+        self.assertEqual(
+            _infer_debate_winner("On balance, the Con team has the stronger case."),
+            "con",
+        )
+
+    def test_cjk_transcript_is_tokenized_and_analyzed(self) -> None:
+        analysis = analyze_debate(
+            "我们是否应该在早上吃冰淇淋？",
+            [
+                {
+                    "speaker": "Pro Advocate",
+                    "role": "pro_lead_advocate",
+                    "round": 1,
+                    "model": "gpt-4o-mini",
+                    "content": "我们应该在早上吃冰淇淋，因为精神状态更稳定，且更容易安排运动。",
+                },
+                {
+                    "speaker": "Con Advocate",
+                    "role": "con_lead_advocate",
+                    "round": 1,
+                    "model": "gpt-4o-mini",
+                    "content": "我反对，因为晚上吃更像甜点，而且早上血糖波动的风险更明显。",
+                },
+            ],
+        )
+
+        self.assertGreaterEqual(len(analysis["attention"]["top_terms"]), 1)
+        self.assertEqual(analysis["stance"]["by_role"]["Pro Advocate"], "support")
+        self.assertEqual(analysis["stance"]["by_role"]["Con Advocate"], "oppose")
 
 
 if __name__ == "__main__":

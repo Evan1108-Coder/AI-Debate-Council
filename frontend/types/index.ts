@@ -58,7 +58,7 @@ export type AgentExperienceRecord = {
   agent_id: string;
   lesson_type: string;
   lesson: string;
-  confidence: string;
+  confidence: "low" | "medium" | "high";
   basis: unknown[];
   created_at: string;
   last_used_at: string | null;
@@ -149,6 +149,8 @@ export type SupportedModel = {
   api_key_env: string;
   litellm_model: string;
   configured: boolean;
+  route_source?: string | null;
+  availability_reason?: string | null;
 };
 
 export type ProviderSummary = {
@@ -159,6 +161,8 @@ export type ProviderSummary = {
   unlocked_model_count: number;
   total_model_count: number;
   models: SupportedModel[];
+  status_label?: string;
+  status_reason?: string | null;
 };
 
 export type ModelsResponse = {
@@ -169,6 +173,7 @@ export type ModelsResponse = {
   minimum_debate_models: number;
   selection_required: boolean;
   mock_mode: boolean;
+  availability_notice?: string | null;
 };
 
 export type DebateAssignment = {

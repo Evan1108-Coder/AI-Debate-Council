@@ -7,7 +7,14 @@ from .analytics import analyze_debate, session_chart_data
 from .config import settings
 from .database import Database
 from .debate import ClientDisconnectedError, DebateError, DebateManager
-from .model_registry import available_model_payloads, available_models, provider_summaries
+from .model_registry import (
+    GITHUB_MODELS_API_KEY_ENV,
+    PROVIDER_ORDER,
+    SUPPORTED_MODELS,
+    available_models,
+    github_catalog_error,
+    verify_models_runtime,
+)
 from .runtime_diary import runtime_diary
 from .schemas import (
     ChatSession,
@@ -17,6 +24,7 @@ from .schemas import (
     FeedbackRequest,
     RenameDebateRequest,
     RenameSessionRequest,
+    ResetAgentExperienceRequest,
     SessionSettingsUpdate,
 )
 
@@ -70,18 +78,105 @@ def health() -> dict:
 
 
 @app.get("/api/models")
-def models() -> dict:
+async def models() -> dict:
     configured = available_models()
-    include_mock = settings.mock_llm and not configured
-    unlocked_models = available_model_payloads(include_mock=include_mock)
+    candidate_route_sources = {
+        model.name: model.route.source if model.route is not None else None for model in configured
+    }
+    verification = await verify_models_runtime(configured)
+    unlocked_models = []
+    for model in configured:
+        availability = verification.get(model.name)
+        if availability and availability.available:
+            payload = model.public_dict(configured=True)
+            if availability.reason:
+                payload["availability_reason"] = availability.reason
+            unlocked_models.append(payload)
+    include_mock = settings.mock_llm and not unlocked_models
+    if include_mock:
+        unlocked_models.insert(
+            0,
+            {
+                "name": "mock-debate-model",
+                "provider": "mock",
+                "provider_label": "Mock",
+                "api_key_env": "MOCK_LLM_RESPONSES",
+                "litellm_model": "mock-debate-model",
+                "configured": True,
+                "route_source": "mock",
+                "availability_reason": None,
+            },
+        )
+    providers = []
+    for provider in PROVIDER_ORDER:
+        provider_models = [model for model in SUPPORTED_MODELS if model.provider == provider]
+        if not provider_models:
+            continue
+        verified_models = [
+            model
+            for model in provider_models
+            if verification.get(model.name, None) and verification[model.name].available
+        ]
+        direct_configured = any(model.direct_api_key for model in provider_models)
+        github_configured = any(
+            candidate_route_sources.get(model.name) == "github_models" for model in provider_models
+        )
+        first_reason = next(
+            (
+                verification[model.name].reason
+                for model in provider_models
+                if model.name in verification and verification[model.name].reason
+            ),
+            None,
+        )
+        if verified_models:
+            status_label = f"{len(verified_models)} unlocked"
+            status_reason = None
+        elif direct_configured or github_configured:
+            status_label = "Unavailable"
+            status_reason = first_reason or "No working model from this provider passed the live check."
+        else:
+            status_label = "Locked"
+            status_reason = github_catalog_error() if not direct_configured else None
+            if not status_reason:
+                status_reason = (
+                    f"Add {provider_models[0].api_key_env} to unlock these models."
+                    if not github_configured
+                    else f"Add {GITHUB_MODELS_API_KEY_ENV} to unlock GitHub-routed models."
+                )
+        providers.append(
+            {
+                "provider": provider,
+                "provider_label": provider_models[0].provider_label,
+                "api_key_env": (
+                    provider_models[0].api_key_env
+                    if direct_configured or not github_configured
+                    else GITHUB_MODELS_API_KEY_ENV
+                ),
+                "configured": bool(verified_models),
+                "unlocked_model_count": len(verified_models),
+                "total_model_count": len(provider_models),
+                "models": [model.public_dict(configured=True) for model in verified_models],
+                "status_label": status_label,
+                "status_reason": status_reason,
+            }
+        )
+    availability_notice = None
+    if not unlocked_models and not include_mock:
+        if any(model.route is not None for model in configured):
+            reasons = [reason for reason in (provider["status_reason"] for provider in providers) if reason]
+            availability_notice = reasons[0] if reasons else "No working models passed the live check."
+        else:
+            availability_notice = "No working API keys or supported model routes are available yet."
     return {
         "models": unlocked_models,
-        "providers": provider_summaries(),
+        "providers": providers,
         "available_model_count": len(unlocked_models),
         "real_available_model_count": len(configured),
         "minimum_debate_models": 1,
         "selection_required": True,
         "mock_mode": settings.mock_llm,
+        "availability_notice": availability_notice,
     }
 
 
@@ -97,8 +192,8 @@ def update_council_settings(payload: CouncilSettingsUpdate) -> dict:
 
 
 @app.post("/api/council-settings/reset-agent-experience")
-def reset_universal_agent_experience(payload: dict) -> dict:
-    phrase = str(payload.get("confirmation") or "").strip()
+def reset_universal_agent_experience(payload: ResetAgentExperienceRequest) -> dict:
+    phrase = payload.confirmation.strip()
     if phrase != "RESET COUNCIL IDENTITIES":
         raise HTTPException(
             status_code=422,

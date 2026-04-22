@@ -10,7 +10,7 @@ BACKEND_DIR = ROOT_DIR / "backend"
 # The root project .env should be authoritative for local development. This prevents
 # an old shell-level API key from silently unlocking a provider the user left blank.
 load_dotenv(ROOT_DIR / ".env", override=True)
-load_dotenv(BACKEND_DIR / ".env", override=True)
+load_dotenv(BACKEND_DIR / ".env", override=False)
 
 
 class Settings:

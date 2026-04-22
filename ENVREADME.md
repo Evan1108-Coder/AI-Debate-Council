@@ -32,6 +32,7 @@ Think of provider API keys as keys that unlock doors:
 - `ANTHROPIC_API_KEY` unlocks all 4 Anthropic models.
 - `GROQ_API_KEY` unlocks all 3 Llama models served through Groq.
 - And so on for Google, MiniMax, and Moonshot.
+- `GITHUB_MODELS_API_KEY` is different: it is one optional GitHub gateway token. The app checks GitHub Models' live catalog and unlocks only the models from this project's supported list that GitHub actually exposes to that token.
 
 The frontend calls `GET /api/models` and uses the returned `models` array for all dropdowns. That array contains only unlocked models. Each chat stores an Overall Model, and Chat Settings can optionally override the model for individual agent roles.
 
@@ -46,6 +47,7 @@ The frontend calls `GET /api/models` and uses the returned `models` array for al
 | `DEBATE_ROUNDS` | No | `2` | Default number of advocate-led discussion phases for new chats. Users can override this per chat in Chat Settings (1–6). |
 | `LITELLM_TIMEOUT_SECONDS` | No | `120` | Timeout in seconds for each model call through LiteLLM. Applies to streamed debate turns and non-streamed safety/intent classifier calls (capped at 30 seconds for those). |
 | `MOCK_LLM_RESPONSES` | No | `false` | Set to `true` to stream local fake responses without any API keys. Useful for UI development and testing. When enabled and no real provider keys are set, a `mock-debate-model` appears in the dropdown. |
+| `GITHUB_MODELS_API_KEY` | No | blank | Optional GitHub Models token or PAT with `models:read`. When set, the backend queries the GitHub Models catalog and unlocks any matching supported models through LiteLLM's `github/...` provider route. This is for GitHub Models only, not for normal provider APIs. |
 
 ### Notes on CORS
 
@@ -71,6 +73,21 @@ OPENAI_API_KEY=sk-...
 **Models unlocked**: `gpt-5.4-pro`, `gpt-5.4-mini`, `gpt-4o`, `gpt-4o-mini`
 
 Get your key from: [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
+
+### GitHub Models
+
+```text
+GITHUB_MODELS_API_KEY=github_pat_...
+```
+
+Use this only if you want to call supported models through GitHub Models instead of each provider's direct API.
+
+- The token should have the `models:read` permission if it is a fine-grained PAT.
+- The app queries GitHub Models' live catalog and only unlocks models from this project's supported list that GitHub currently exposes to that token.
+- This means the unlocked set can be smaller than the full 21-model app list, and it can change over time as GitHub's catalog changes.
+- If you are unsure what this is, leave it blank and use the normal provider keys above.
+- If the app says `The models permission is required to access this endpoint`, the token exists but is missing GitHub Models permission. Create or edit the token and grant `models:read`.
+- If GitHub later says `Unknown model: ...`, the token is fine but GitHub does not accept that exact model ID for inference. In that case, use the direct provider key for that model or choose another GitHub-supported model.
 
 ### Anthropic
 
@@ -154,6 +171,8 @@ Example response with only OpenAI configured:
   "mock_mode": false
 }
 ```
+
+If you use `GITHUB_MODELS_API_KEY`, the unlocked models depend on GitHub's current model catalog. For example, the response may show OpenAI, Google, Anthropic, or Llama-family models only if the GitHub Models catalog for your token currently includes compatible IDs that match this app's supported model list.
 
 ## Frontend Variables
 

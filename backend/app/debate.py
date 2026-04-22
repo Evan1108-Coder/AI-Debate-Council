@@ -12,9 +12,14 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from .analytics import analyze_debate, format_analytics_report, session_chart_data
 from .config import settings
-from .costing import CostTracker, message_input_text
+from .costing import CostTracker, estimate_messages_tokens, estimate_tokens, message_input_text
 from .database import Database, utc_now
-from .model_registry import MOCK_MODEL, SupportedModel, get_available_model
+from .model_registry import (
+    MOCK_MODEL,
+    SupportedModel,
+    get_available_model,
+    mark_model_unavailable,
+)
 from .runtime_diary import runtime_diary
 
 
@@ -61,6 +66,32 @@ TEAM_ROLE_DEFINITIONS = (
     },
 )
 USER_MESSAGE_MAX_CHARS = 5500
+QUESTION_END_RE = re.compile(r"[?？]\s*$")
+CJK_CHAR_RE = re.compile(r"[\u3400-\u9fff\uf900-\ufaff]")
+MODEL_CONTEXT_LIMITS = {
+    "gpt-4o-mini": 8_192,
+    "gpt-4o": 128_000,
+    "gpt-5.4-mini": 128_000,
+    "gpt-5.4-pro": 128_000,
+    "claude-opus-4-6": 200_000,
+    "claude-sonnet-4-6": 200_000,
+    "claude-haiku-4-5": 200_000,
+    "claude-3.5-sonnet": 200_000,
+    "gemini-3.1-pro": 128_000,
+    "gemini-3-flash": 128_000,
+    "gemini-2.5-flash-lite": 128_000,
+    "llama-4-maverick": 32_768,
+    "llama-4-scout": 32_768,
+    "llama-3.3-70b": 32_768,
+    "minimax-m2.7": 32_768,
+    "minimax-m2.5-lightning": 32_768,
+    "kimi-latest": 128_000,
+    "kimi-k2-thinking": 128_000,
+    "kimi-k2-turbo-preview": 128_000,
+    "kimi-k2.5-vision": 128_000,
+    "moonshot-v1-128k": 128_000,
+    "mock-debate-model": 32_768,
+}
 TEAM_DEFINITIONS = (
     {
         "team": "pro",
@@ -525,7 +556,13 @@ class DebateManager:
                 "round": "chat",
             }
         )
-        messages = self._chat_messages(session_id, content, session_settings, chat_generation_settings)
+        messages = self._chat_messages(
+            session_id,
+            content,
+            session_settings,
+            chat_generation_settings,
+            chat_model,
+        )
         try:
             response = await self._stream_completion(
                 websocket,
@@ -1070,15 +1107,39 @@ class DebateManager:
 
     def debate_positions(self, topic: str) -> dict[str, str]:
         core = self._position_topic_core(topic)
+        modal_match = re.match(r"(?i)^(should|must|can|could|would|will)\s+(.+)$", core)
+        if modal_match:
+            remainder = modal_match.group(2).strip()
+            option_split = self._split_or_topic(remainder)
+            if option_split:
+                shared_prefix, pro_option, con_option = option_split
+                pro_basis = f"{shared_prefix}{pro_option}".strip() if shared_prefix else pro_option
+                con_basis = f"{shared_prefix}{con_option}".strip() if shared_prefix else con_option
+                pro_clause = self._tidy_position_clause(pro_basis)
+                con_clause = self._tidy_position_clause(con_basis)
+                return {
+                    "pro": f"Pro argues that {pro_clause}.",
+                    "con": f"Con argues that {con_clause}, not {pro_clause}.",
+                }
         option_split = self._split_or_topic(core)
         if option_split:
             shared_prefix, pro_option, con_option = option_split
-            pro_clause = self._tidy_position_clause(f"{shared_prefix}{pro_option}")
-            con_clause = self._tidy_position_clause(f"{shared_prefix}{con_option}")
-            not_clause = self._tidy_position_clause(pro_option)
+            pro_basis = f"{shared_prefix}{pro_option}".strip() if shared_prefix else pro_option
+            con_basis = f"{shared_prefix}{con_option}".strip() if shared_prefix else con_option
+            pro_clause = self._tidy_position_clause(pro_basis)
+            con_clause = self._tidy_position_clause(con_basis)
+            not_clause = self._tidy_position_clause(pro_basis)
             return {
-                "pro": f"Pro argues that {pro_clause}.",
-                "con": f"Con argues that {con_clause}, not {not_clause}.",
+                "pro": (
+                    f"Pro argues that {pro_clause}."
+                    if shared_prefix
+                    else f"Pro argues for {pro_clause}."
+                ),
+                "con": (
+                    f"Con argues that {con_clause}, not {not_clause}."
+                    if shared_prefix
+                    else f"Con argues for {con_clause}, not {not_clause}."
+                ),
             }
 
         should_match = re.match(r"(?i)^should\s+(.+)$", core)
@@ -1095,16 +1156,21 @@ class DebateManager:
                 }
 
         readable = core.rstrip("?.")
+        if CJK_CHAR_RE.search(readable):
+            return {
+                "pro": f"Pro supports this topic statement: {readable}.",
+                "con": f"Con challenges this topic statement: {readable}.",
+            }
         return {
             "pro": f"Pro argues that this position is correct: {readable}.",
             "con": f"Con argues that this position is wrong or too weak: {readable}.",
         }
 
     def _position_topic_core(self, topic: str) -> str:
-        core = " ".join(str(topic).strip().split()).strip(" ?.!")
+        core = " ".join(str(topic).strip().split()).strip(" ?.!。！？：:")
         patterns = (
             r"(?i)^please\s+",
-            r"(?i)^(debate|discuss|argue|analyze)\s+(about\s+)?",
+            r"(?i)^(debate|discuss|argue|analyze)\s*:?\s*(about\s+)?",
             r"(?i)^(whether|if)\s+",
         )
         changed = True
@@ -1118,10 +1184,15 @@ class DebateManager:
         return core or str(topic).strip()
 
     def _split_or_topic(self, core: str) -> tuple[str, str, str] | None:
-        parts = re.split(r"\s+or\s+", core, maxsplit=1, flags=re.IGNORECASE)
+        parts = re.split(
+            r"\s+(?:or|versus|vs\.?)\s+|(?:还是|或者|或)",
+            core,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )
         if len(parts) != 2:
             return None
-        left, right = parts[0].strip(), parts[1].strip().rstrip("?.")
+        left, right = parts[0].strip(), parts[1].strip().rstrip("?.。！？")
         if not left or not right:
             return None
         lower_left = left.lower()
@@ -1139,7 +1210,7 @@ class DebateManager:
                     best_index = index
                     best_prep = marker
         if best_index == -1:
-            return None
+            return "", left, right
         shared_prefix = left[: best_index + len(best_prep)]
         pro_option = left[best_index + len(best_prep) :].strip()
         if not pro_option:
@@ -1224,6 +1295,193 @@ class DebateManager:
         if len(normalized) <= limit:
             return normalized
         return normalized[: limit - 3].rstrip() + "..."
+
+    def _model_context_limit(self, model_name: str) -> int:
+        return MODEL_CONTEXT_LIMITS.get(model_name, 32_768)
+
+    def _trim_prompt_block(self, text: str, token_budget: int, *, char_cap: int = 12_000) -> str:
+        normalized = " ".join(str(text).strip().split())
+        if not normalized:
+            return ""
+        clipped = normalized[:char_cap]
+        while clipped and estimate_tokens(clipped) > token_budget:
+            shrink_to = max(240, int(len(clipped) * 0.82))
+            if shrink_to >= len(clipped):
+                break
+            clipped = clipped[:shrink_to].rstrip()
+        if clipped != normalized:
+            clipped = clipped.rstrip(" .,;:") + " ..."
+        return clipped
+
+    def _topic_relevance_score(
+        self,
+        text: str,
+        *,
+        topic: str,
+        positions: dict[str, str] | None = None,
+    ) -> float:
+        focus = "\n".join(
+            part for part in [topic, *(positions or {}).values()] if str(part).strip()
+        )
+        return self._intelligence_similarity(text, focus)
+
+    def _topic_anchor_text(
+        self,
+        topic: str,
+        *,
+        transcript: list[dict[str, Any]] | None = None,
+    ) -> str:
+        positions = self.debate_positions(topic)
+        recent_turns = list(transcript or [])[-4:]
+        recent_scores = [
+            self._topic_relevance_score(
+                str(turn.get("content", "")),
+                topic=topic,
+                positions=positions,
+            )
+            for turn in recent_turns
+            if str(turn.get("content", "")).strip()
+        ]
+        average_recent = sum(recent_scores) / len(recent_scores) if recent_scores else 1.0
+        if recent_scores and average_recent < 0.08:
+            drift_note = (
+                "Drift check: the latest turns started leaning into side issues. "
+                "Refocus on the original question and the Pro/Con starting positions below."
+            )
+        else:
+            drift_note = "Drift check: stay anchored to the original question below, even if recent turns opened a tangent."
+        return dedent(
+            f"""
+            ORIGINAL TOPIC: {topic}
+            PRO STARTING POSITION: {positions["pro"]}
+            CON STARTING POSITION: {positions["con"]}
+            {drift_note}
+            """
+        ).strip()
+
+    def _transcript_for_model(
+        self,
+        transcript: list[dict[str, Any]],
+        *,
+        model_name: str,
+        reserve_tokens: int,
+        hard_turn_cap: int,
+        context_window: int | None = None,
+        topic: str | None = None,
+    ) -> list[dict[str, Any]]:
+        if not transcript:
+            return []
+        if context_window is not None:
+            if context_window <= 0:
+                return []
+            hard_turn_cap = min(hard_turn_cap, max(1, context_window * 8))
+        prompt_budget = max(700, self._model_context_limit(model_name) - max(400, reserve_tokens))
+        per_turn_char_limit = 900 if prompt_budget <= 10_000 else 1_400
+        candidate_turns = transcript[-hard_turn_cap:]
+        trimmed_candidates: list[dict[str, Any]] = []
+        for order, turn in enumerate(candidate_turns):
+            content = self._trim_prompt_block(
+                str(turn.get("content", "")),
+                max(120, prompt_budget // 3),
+                char_cap=per_turn_char_limit,
+            )
+            trimmed_candidates.append({**turn, "content": content, "_order": order})
+
+        if not topic:
+            selected: list[dict[str, Any]] = []
+            used_tokens = 0
+            for turn in reversed(trimmed_candidates):
+                projected = used_tokens + estimate_tokens(str(turn.get("content", ""))) + 18
+                if selected and projected > prompt_budget:
+                    break
+                selected.append(turn)
+                used_tokens = projected
+            return [{k: v for k, v in turn.items() if k != "_order"} for turn in reversed(selected)]
+
+        positions = self.debate_positions(topic)
+        recent_keep = min(len(trimmed_candidates), max(4, min(8, (context_window or 2) * 2)))
+        recent_turns = trimmed_candidates[-recent_keep:]
+        selected_by_order = {int(turn["_order"]): turn for turn in recent_turns}
+        older_turns = trimmed_candidates[:-recent_keep]
+        ranked_older = sorted(
+            older_turns,
+            key=lambda turn: (
+                self._topic_relevance_score(
+                    str(turn.get("content", "")),
+                    topic=topic,
+                    positions=positions,
+                ),
+                float(turn["_order"]),
+            ),
+            reverse=True,
+        )
+        used_tokens = sum(estimate_tokens(str(turn.get("content", ""))) + 18 for turn in selected_by_order.values())
+        for turn in ranked_older:
+            relevance = self._topic_relevance_score(
+                str(turn.get("content", "")),
+                topic=topic,
+                positions=positions,
+            )
+            if relevance <= 0:
+                continue
+            projected = used_tokens + estimate_tokens(str(turn.get("content", ""))) + 18
+            if selected_by_order and projected > prompt_budget:
+                continue
+            selected_by_order[int(turn["_order"])] = turn
+            used_tokens = projected
+        ordered = [
+            {k: v for k, v in turn.items() if k != "_order"}
+            for _, turn in sorted(selected_by_order.items(), key=lambda item: item[0])
+        ]
+        return ordered
+
+    def _chat_history_for_model(
+        self,
+        history: list[dict[str, Any]],
+        *,
+        model_name: str,
+        reserve_tokens: int,
+    ) -> list[dict[str, Any]]:
+        if not history:
+            return []
+        prompt_budget = max(600, self._model_context_limit(model_name) - max(400, reserve_tokens))
+        selected: list[dict[str, Any]] = []
+        used_tokens = 0
+        for message in reversed(history[-24:]):
+            content = self._trim_prompt_block(str(message.get("content", "")), max(120, prompt_budget // 4), char_cap=1200)
+            projected = used_tokens + estimate_tokens(content) + 20
+            if selected and projected > prompt_budget:
+                break
+            selected.append({**message, "content": content})
+            used_tokens = projected
+        return list(reversed(selected))
+
+    def _fit_messages_to_model(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        model_name: str,
+        reserve_tokens: int,
+    ) -> list[dict[str, str]]:
+        fitted = [{**message} for message in messages]
+        prompt_budget = max(800, self._model_context_limit(model_name) - max(400, reserve_tokens))
+        mutable_indexes = [index for index, message in enumerate(fitted) if message.get("role") != "system"]
+        while mutable_indexes and estimate_messages_tokens(fitted) > prompt_budget:
+            largest_index = max(
+                mutable_indexes,
+                key=lambda index: estimate_tokens(str(fitted[index].get("content", ""))),
+            )
+            current = str(fitted[largest_index].get("content", ""))
+            trimmed = self._trim_prompt_block(
+                current,
+                max(160, int(estimate_tokens(current) * 0.72)),
+                char_cap=max(320, int(len(current) * 0.76)),
+            )
+            if trimmed == current:
+                mutable_indexes.remove(largest_index)
+                continue
+            fitted[largest_index]["content"] = trimmed
+        return fitted
 
     def _parse_json_object(self, text: str) -> dict[str, Any] | None:
         match = re.search(r"\{.*\}", text, flags=re.DOTALL)
@@ -1388,17 +1646,34 @@ class DebateManager:
                     operation=operation,
                 )
             return content
-        if acompletion is None or not model.api_key:
+        route = model.route
+        if acompletion is None or route is None:
             raise DebateError(f"Private notebook model unavailable for {model.name}.")
-        response = await acompletion(
-            model=model.litellm_model,
-            messages=messages,
-            api_key=model.api_key,
-            stream=False,
-            temperature=min(0.4, float(generation_settings.get("temperature", 0.4))),
-            max_tokens=int(generation_settings.get("max_tokens", 220)),
-            timeout=min(settings.request_timeout_seconds, 45),
-        )
+        candidate_models = (route.litellm_model, *route.fallback_models)
+        last_exc: Exception | None = None
+        response = None
+        for candidate_model in candidate_models:
+            try:
+                response = await acompletion(
+                    model=candidate_model,
+                    messages=messages,
+                    api_key=route.api_key,
+                    stream=False,
+                    temperature=min(0.4, float(generation_settings.get("temperature", 0.4))),
+                    max_tokens=int(generation_settings.get("max_tokens", 220)),
+                    timeout=min(settings.request_timeout_seconds, 45),
+                )
+                break
+            except Exception as exc:
+                last_exc = exc
+                if route.source == "github_models" and self._is_github_unknown_model_error(exc):
+                    continue
+                self._maybe_disable_model_route(model, exc)
+                raise
+        if response is None:
+            assert last_exc is not None
+            self._maybe_disable_model_route(model, last_exc)
+            raise last_exc
         text = sanitize_model_text(self._completion_text(response).strip())
         if cost_tracker is not None:
             cost_tracker.record_call(
@@ -1483,8 +1758,143 @@ class DebateManager:
         cleaned = re.sub(r"\s+", " ", sanitize_model_text(content)).strip()
         if not cleaned:
             return []
-        parts = re.split(r"(?<=[.!?])\s+", cleaned)
+        parts = re.findall(r"[^.!?。！？]+[.!?。！？]?", cleaned)
         return [part.strip() for part in parts if 35 <= len(part.strip()) <= 260]
+
+    def _intelligence_tokens(self, text: str) -> set[str]:
+        latin = set(re.findall(r"[a-zA-Z][a-zA-Z0-9']*", text.lower()))
+        cjk = set(CJK_CHAR_RE.findall(text))
+        return {token for token in [*latin, *cjk] if token}
+
+    def _intelligence_similarity(self, left: str, right: str) -> float:
+        left_tokens = self._intelligence_tokens(left)
+        right_tokens = self._intelligence_tokens(right)
+        if not left_tokens or not right_tokens:
+            return 0.0
+        return len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+
+    def _intelligence_confidence(self, sentence: str, *, kind: str, urls: list[str] | None = None) -> float:
+        urls = urls or []
+        lowered = sentence.lower()
+        score = 0.42
+        if kind == "claim":
+            if any(marker in lowered for marker in ("because", "therefore", "shows", "proves", "means", "should", "must")):
+                score += 0.12
+            if any(marker in sentence for marker in ("应该", "必须", "说明", "证明", "意味着")):
+                score += 0.12
+        elif kind == "challenge":
+            if QUESTION_END_RE.search(sentence):
+                score += 0.15
+            if any(marker in lowered for marker in ("contradict", "unanswered", "unsupported", "fails", "weak", "burden")):
+                score += 0.08
+        elif kind == "evidence":
+            score += 0.08
+            if urls:
+                score += 0.2
+        if len(sentence) > 120:
+            score += 0.05
+        if len(self._intelligence_tokens(sentence)) >= 10:
+            score += 0.05
+        return max(0.2, min(0.92, round(score, 2)))
+
+    def _resolve_pending_challenges(
+        self,
+        *,
+        session_id: str,
+        debate_id: str,
+        responding_team: str,
+        agent: dict[str, Any],
+        phase: dict[str, Any],
+        content: str,
+    ) -> None:
+        response_tokens = self._intelligence_tokens(content)
+        if not response_tokens:
+            return
+        records = self.db.list_intelligence_records(session_id, debate_id)
+        pending = [
+            record
+            for record in records
+            if record.get("record_type") == "challenge"
+            and str(record.get("status") or "").lower() == "unanswered"
+            and str((record.get("payload") or {}).get("target_team") or "") == responding_team
+        ]
+        answer_cues = (
+            "because",
+            "the answer is",
+            "to answer",
+            "that point fails",
+            "that concern fails",
+            "you asked",
+            "yes,",
+            "no,",
+            "first,",
+        )
+        for record in pending[-6:]:
+            challenge_text = str(record.get("content") or "")
+            similarity = self._intelligence_similarity(challenge_text, content)
+            direct_response = any(cue in content.lower() for cue in answer_cues)
+            status = None
+            if similarity >= 0.22 or (similarity >= 0.14 and direct_response):
+                status = "Answered"
+            elif similarity >= 0.1 or (direct_response and similarity >= 0.04):
+                status = "Partially answered"
+            if not status:
+                continue
+            payload = dict(record.get("payload") or {})
+            payload.update(
+                {
+                    "resolved_by": agent["role"],
+                    "resolved_phase_key": phase["key"],
+                    "resolved_phase_title": phase["title"],
+                    "resolution_similarity": round(similarity, 3),
+                }
+            )
+            basis = list(record.get("basis") or [])
+            basis.append(
+                {
+                    "type": "response_match",
+                    "speaker": agent["speaker"],
+                    "phase_key": phase["key"],
+                }
+            )
+            confidence = max(float(record.get("confidence") or 0), 0.72 if status == "Answered" else 0.58)
+            self.db.update_intelligence_record(
+                str(record["id"]),
+                status=status,
+                confidence=confidence,
+                payload=payload,
+                basis=basis,
+            )
+
+    def _finalize_pending_challenges(self, session_id: str, debate_id: str, transcript: list[dict[str, Any]]) -> None:
+        records = self.db.list_intelligence_records(session_id, debate_id)
+        last_turn_index: dict[str, int] = {}
+        for index, turn in enumerate(transcript):
+            team = str(turn.get("team") or "")
+            if team:
+                last_turn_index[team] = index
+        for record in records:
+            if record.get("record_type") != "challenge":
+                continue
+            if str(record.get("status") or "").lower() != "unanswered":
+                continue
+            target_team = str((record.get("payload") or {}).get("target_team") or "")
+            challenge_index = -1
+            challenge_basis = list(record.get("basis") or [])
+            for item in challenge_basis:
+                if isinstance(item, dict) and item.get("phase_key"):
+                    break
+            if target_team and target_team in last_turn_index:
+                challenge_index = last_turn_index[target_team]
+            final_status = "Ignored" if challenge_index >= 0 else "Unanswered"
+            payload = dict(record.get("payload") or {})
+            payload["finalized_at_close"] = True
+            self.db.update_intelligence_record(
+                str(record["id"]),
+                status=final_status,
+                confidence=max(float(record.get("confidence") or 0), 0.52),
+                payload=payload,
+            )
 
     def _capture_turn_intelligence(
         self,
@@ -1499,12 +1909,20 @@ class DebateManager:
         basis = [{"speaker": agent["speaker"], "phase_key": phase["key"], "phase_title": phase["title"]}]
         role = agent["role"]
         team = agent["team"]
-        claim_terms = re.compile(r"\b(should|must|because|therefore|means|proves|shows|better|worse|risk|benefit|cost|fair|unfair)\b", re.I)
+        self._resolve_pending_challenges(
+            session_id=session_id,
+            debate_id=debate_id,
+            responding_team=team,
+            agent=agent,
+            phase=phase,
+            content=content,
+        )
+        claim_terms = re.compile(r"\b(should|must|because|therefore|means|proves|shows|better|worse|risk|benefit|cost|fair|unfair)\b|应该|必须|因为|说明|证明|更好|更差|风险|好处|成本", re.I)
         challenge_terms = re.compile(r"\b(unanswered|unsupported|fails?|cannot|does not|has not|contradicts?|weak|problem|burden)\b", re.I)
         claim_count = 0
         challenge_count = 0
         for sentence in sentences:
-            if sentence.endswith("?") and challenge_count < 2:
+            if QUESTION_END_RE.search(sentence) and challenge_count < 2:
                 challenge_count += 1
                 self.db.add_intelligence_record(
                     session_id=session_id,
@@ -1516,8 +1934,13 @@ class DebateManager:
                     title=f"Challenge from {agent['speaker']}",
                     content=sentence,
                     status="Unanswered",
-                    confidence=0.55,
-                    payload={"target_team": "con" if team == "pro" else "pro", "impact": "medium", "phase_kind": phase.get("kind")},
+                    confidence=self._intelligence_confidence(sentence, kind="challenge"),
+                    payload={
+                        "target_team": "con" if team == "pro" else "pro",
+                        "impact": "medium",
+                        "phase_kind": phase.get("kind"),
+                        "keywords": sorted(self._intelligence_tokens(sentence))[:14],
+                    },
                     basis=basis,
                 )
                 continue
@@ -1533,8 +1956,13 @@ class DebateManager:
                     title=f"Objection from {agent['speaker']}",
                     content=sentence,
                     status="Unanswered",
-                    confidence=0.5,
-                    payload={"target_team": "con" if team == "pro" else "pro", "impact": "medium", "phase_kind": phase.get("kind")},
+                    confidence=self._intelligence_confidence(sentence, kind="challenge"),
+                    payload={
+                        "target_team": "con" if team == "pro" else "pro",
+                        "impact": "medium",
+                        "phase_kind": phase.get("kind"),
+                        "keywords": sorted(self._intelligence_tokens(sentence))[:14],
+                    },
                     basis=basis,
                 )
                 continue
@@ -1550,8 +1978,11 @@ class DebateManager:
                     title=f"Claim from {agent['speaker']}",
                     content=sentence,
                     status="Introduced",
-                    confidence=0.5,
-                    payload={"phase_kind": phase.get("kind")},
+                    confidence=self._intelligence_confidence(sentence, kind="claim"),
+                    payload={
+                        "phase_kind": phase.get("kind"),
+                        "keywords": sorted(self._intelligence_tokens(sentence))[:14],
+                    },
                     basis=basis,
                 )
         urls = re.findall(r"https?://[^\s)\]]+", content)
@@ -1568,7 +1999,7 @@ class DebateManager:
                 title=f"Evidence note from {agent['speaker']}",
                 content=evidence_text,
                 status="Verified URL" if urls else "Model knowledge, not live verified",
-                confidence=0.7 if urls else 0.35,
+                confidence=self._intelligence_confidence(evidence_text, kind="evidence", urls=urls),
                 payload={"source_type": source_type, "url": urls[0] if urls else "", "verified": bool(urls)},
                 basis=basis,
             )
@@ -1599,6 +2030,7 @@ class DebateManager:
         judge_summary: str,
         session_settings: dict[str, Any],
     ) -> None:
+        self._finalize_pending_challenges(session_id, debate_id, transcript)
         records = self.db.list_intelligence_records(session_id, debate_id)
         claims = [record for record in records if record["record_type"] == "claim"]
         challenges = [record for record in records if record["record_type"] == "challenge"]
@@ -1609,7 +2041,9 @@ class DebateManager:
             "claim_count": len(claims),
             "challenge_count": len(challenges),
             "evidence_count": len(evidence),
-            "unanswered_challenges": sum(1 for item in challenges if item.get("status") == "Unanswered"),
+            "unanswered_challenges": sum(
+                1 for item in challenges if str(item.get("status") or "").lower() in {"unanswered", "ignored"}
+            ),
             "judge_mode": session_settings.get("judge_mode", "Hybrid"),
             "evidence_strictness": session_settings.get("evidence_strictness", "Normal"),
         }
@@ -1654,12 +2088,76 @@ class DebateManager:
         self._save_agent_experience(session_id, debate_id, records, scorecard)
 
     def _detect_winner(self, judge_summary: str) -> str:
-        text = judge_summary.lower()
-        if re.search(r"\b(winner|verdict|clear winner)\b[^\n]{0,80}\bpro\b", text) or "pro wins" in text:
-            return "pro"
-        if re.search(r"\b(winner|verdict|clear winner)\b[^\n]{0,80}\bcon\b", text) or "con wins" in text:
-            return "con"
+        text = re.sub(r"\s+", " ", judge_summary.lower()).strip()
+        if not text:
+            return "unclear"
+        pro_aliases = (
+            "pro",
+            "pro team",
+            "pro advocate",
+            "affirmative",
+            "supporting side",
+            "supporting team",
+            "in favor",
+        )
+        con_aliases = (
+            "con",
+            "con team",
+            "con advocate",
+            "negative",
+            "opposing side",
+            "opposing team",
+            "against",
+            "skeptical",
+        )
+        candidate_sentences = [
+            sentence.strip()
+            for sentence in re.split(r"(?<=[.!?。！？])\s+|\n+", text)
+            if sentence.strip()
+            and any(
+                re.search(pattern, sentence)
+                for pattern in (
+                    r"\bwin(?:s|ning|ner)?\b",
+                    r"\bverdict\b",
+                    r"\bstronger\s+case\b",
+                    r"\bbetter\s+case\b",
+                    r"\bwinning\s+position\b",
+                    r"\bedges?\s+out\b",
+                    r"\btakes?\s+the\s+debate\b",
+                    r"\bfavors?\b",
+                    r"\bi\s+side\s+with\b",
+                )
+            )
+        ]
+        for sentence in candidate_sentences or [text]:
+            pro_hit = any(re.search(rf"\b{re.escape(alias)}\b", sentence) for alias in pro_aliases)
+            con_hit = any(re.search(rf"\b{re.escape(alias)}\b", sentence) for alias in con_aliases)
+            if pro_hit and not con_hit:
+                return "pro"
+            if con_hit and not pro_hit:
+                return "con"
         return "unclear"
+
+    def _normalize_judge_summary(self, judge_summary: str, topic: str) -> str:
+        cleaned = sanitize_model_text(judge_summary).strip()
+        if not cleaned:
+            return cleaned
+        winner = self._detect_winner(cleaned)
+        winner_labels = {
+            "pro": "WINNER: Pro",
+            "con": "WINNER: Con",
+            "unclear": "WINNER: Unclear",
+        }
+        first_nonempty = next((line.strip() for line in cleaned.splitlines() if line.strip()), "")
+        if first_nonempty.upper().startswith("WINNER:"):
+            return cleaned
+        if winner == "pro":
+            reason_line = "Reason: The Pro side made the stronger case on this debate question."
+        elif winner == "con":
+            reason_line = "Reason: The Con side made the stronger case on this debate question."
+        else:
+            reason_line = f"Reason: The judge did not clearly resolve a winner for {self._clip_for_prompt(topic, 120)}."
+        return f"{winner_labels[winner]}\n{reason_line}\n\n{cleaned}"
 
     def _post_debate_review_text(self, topic: str, scorecard: dict[str, Any], judge_summary: str) -> str:
         return dedent(
@@ -1687,15 +2185,41 @@ class DebateManager:
             grouped.setdefault(agent_id, {"claim": 0, "challenge": 0, "evidence": 0, "value_record": 0})
             if record["record_type"] in grouped[agent_id]:
                 grouped[agent_id][record["record_type"]] += 1
+        unresolved_by_target = {"pro": 0, "con": 0}
+        verified_evidence_by_agent: dict[str, int] = {}
+        for record in records:
+            if record.get("record_type") == "challenge" and str(record.get("status") or "").lower() in {"unanswered", "ignored"}:
+                target_team = str((record.get("payload") or {}).get("target_team") or "")
+                if target_team in unresolved_by_target:
+                    unresolved_by_target[target_team] += 1
+            if record.get("record_type") == "evidence" and (record.get("payload") or {}).get("verified"):
+                agent_id = record.get("agent_id") or record.get("role") or "council"
+                verified_evidence_by_agent[agent_id] = verified_evidence_by_agent.get(agent_id, 0) + 1
         for agent_id, counts in grouped.items():
             total = sum(counts.values())
             if total == 0:
                 continue
+            team = "pro" if str(agent_id).startswith("pro_") else "con" if str(agent_id).startswith("con_") else ""
+            unresolved_for_team = unresolved_by_target.get(team, 0)
+            takeaways = []
+            if counts["challenge"] > 0:
+                takeaways.append(f"surface pressure points clearly ({counts['challenge']} challenge record(s))")
+            if verified_evidence_by_agent.get(agent_id, 0) > 0:
+                takeaways.append(
+                    f"reuse evidence-backed support when relevant ({verified_evidence_by_agent[agent_id]} verified evidence item(s))"
+                )
+            if unresolved_for_team > 0 and "advocate" in str(agent_id):
+                takeaways.append(
+                    f"answer unresolved attacks before closing ({unresolved_for_team} challenge record(s) remained open on this side)"
+                )
+            if not takeaways:
+                takeaways.append("review the latest tracked claims and challenges before the next public turn")
             lesson = (
                 f"Observed in debate {debate_id[:8]}: created {counts['claim']} claim record(s), "
                 f"{counts['challenge']} challenge record(s), {counts['evidence']} evidence record(s), "
                 f"and {counts['value_record']} value note(s). Winner detected: {scorecard['winner']}. "
-                "This is factual activity history, not a proven trait."
+                f"Actionable next-use note based on recorded debate objects: {', '.join(takeaways)}. "
+                "This is factual debate history, not an invented trait."
             )
             self.db.add_agent_experience(
                 scope=scope,
@@ -1703,8 +2227,16 @@ class DebateManager:
                 agent_id=agent_id,
                 lesson_type="debate_activity",
                 lesson=lesson,
-                confidence="low",
-                basis=[{"debate_id": debate_id, "counts": counts, "winner": scorecard["winner"]}],
+                confidence="medium",
+                basis=[
+                    {
+                        "debate_id": debate_id,
+                        "counts": counts,
+                        "winner": scorecard["winner"],
+                        "unresolved_for_team": unresolved_for_team,
+                        "verified_evidence": verified_evidence_by_agent.get(agent_id, 0),
+                    }
+                ],
             )
         self.db.add_intelligence_record(
             session_id=session_id,
@@ -1761,7 +2293,14 @@ class DebateManager:
         )
 
         messages = self._agent_messages(
-            topic, agent, phase, transcript, session_settings, generation_settings, intelligence_context
+            topic,
+            agent,
+            phase,
+            transcript,
+            session_settings,
+            generation_settings,
+            model,
+            intelligence_context,
         )
         cost_start = len(cost_tracker.entries) if cost_tracker else 0
         try:
@@ -1846,7 +2385,14 @@ class DebateManager:
             }
         )
         messages = self._judge_messages(
-            topic, transcript, analysis, session_settings, generation_settings, judge_assistant_report, intelligence_context
+            topic,
+            transcript,
+            analysis,
+            session_settings,
+            generation_settings,
+            model,
+            judge_assistant_report,
+            intelligence_context,
         )
         cost_start = len(cost_tracker.entries) if cost_tracker else 0
         try:
@@ -1858,6 +2404,11 @@ class DebateManager:
                 session_settings=generation_settings,
                 cost_tracker=cost_tracker,
                 cost_operation="Judge",
+            )
+            content = self._normalize_judge_summary(content, topic)
+            await self._send_json(
+                websocket,
+                {"type": "message_replaced", "stream_id": stream_id, "content": content}
             )
         except ClientDisconnectedError:
             raise
@@ -1939,7 +2490,13 @@ class DebateManager:
             }
         )
         messages = self._judge_assistant_messages(
-            topic, transcript, analysis, session_settings, generation_settings, intelligence_context
+            topic,
+            transcript,
+            analysis,
+            session_settings,
+            generation_settings,
+            model,
+            intelligence_context,
         )
         cost_start = len(cost_tracker.entries) if cost_tracker else 0
         try:
@@ -2030,7 +2587,7 @@ class DebateManager:
     def _failure_message(self, exc: Exception) -> str:
         return f"This AI response cannot be generated due to this error: {self._provider_error_message(exc)}"
 
-    def _provider_error_message(self, exc: Exception) -> str:
+    def _exception_text(self, exc: Exception) -> str:
         original = exc.original if isinstance(exc, CompletionStreamError) else exc
         seen: set[int] = set()
         parts: list[str] = []
@@ -2047,21 +2604,75 @@ class DebateManager:
                 if hasattr(current, attr):
                     add(getattr(current, attr))
             add(str(current))
-            current = getattr(current, "original_exception", None) or getattr(current, "original", None) or current.__cause__
+            current = (
+                getattr(current, "original_exception", None)
+                or getattr(current, "original", None)
+                or current.__cause__
+            )
 
         if not parts:
             parts.append(original.__class__.__name__)
+        return " | ".join(parts)
 
-        message = " | ".join(parts)
+    def _maybe_disable_model_route(self, model: SupportedModel, exc: Exception) -> None:
+        route = model.route
+        if route is None:
+            return
+        lowered = self._exception_text(exc).lower()
+        if any(
+            marker in lowered
+            for marker in (
+                "unknown model",
+                "model not found",
+                "does not exist",
+                "invalid model",
+                "not found the model",
+                "permission denied",
+                "unsupported model",
+                "not support",
+            )
+        ):
+            mark_model_unavailable(model.name, self._exception_text(exc))
+
+    def _is_github_unknown_model_error(self, exc: Exception) -> bool:
+        lowered = self._exception_text(exc).lower()
+        return "github" in lowered and "unknown model" in lowered
+
+    def _provider_error_message(self, exc: Exception) -> str:
+        message = self._exception_text(exc)
         lowered = message.lower()
+        if "`models` permission is required" in lowered or "models: read" in lowered:
+            return (
+                "GitHub Models rejected the token because it is missing the required "
+                "`models:read` permission. Create or edit the GitHub token, grant "
+                "GitHub Models access, then update GITHUB_MODELS_API_KEY. "
+                f"Details: {message}"
+            )
+        if "unknown model" in lowered and "github" in lowered:
+            return (
+                "GitHub Models does not accept this model ID for inference. "
+                "This model has been hidden for now. "
+                "Use the direct provider key for this model, or choose another supported model. "
+                f"Details: {message}"
+            )
         if any(marker in lowered for marker in ("529", "overloaded", "high load")):
             return f"Provider is overloaded or under high load. Retry shortly. Details: {message}"
         if "rate limit" in lowered or "429" in lowered:
             return f"Provider rate limit reached. Wait a little or choose another unlocked model. Details: {message}"
         if "api key" in lowered or "authentication" in lowered or "unauthorized" in lowered or "401" in lowered:
             return f"Provider authentication failed. Check the API key for this model's provider. Details: {message}"
-        if "not found" in lowered or "404" in lowered or "model" in lowered and "does not exist" in lowered:
-            return f"Provider rejected the model name or endpoint. Choose another unlocked model or check provider access. Details: {message}"
+        if (
+            "permission denied" in lowered
+            or "not found the model" in lowered
+            or "not found" in lowered
+            or "404" in lowered
+            or "model" in lowered and "does not exist" in lowered
+        ):
+            return (
+                "This model is not available for the current API key or endpoint. "
+                "The app has hidden it for now. Choose another verified model. "
+                f"Details: {message}"
+            )
         return message
 
     def _clean_error_text(self, value: object) -> str:
@@ -2123,10 +2734,16 @@ class DebateManager:
 
         if acompletion is None:
             raise DebateError("LiteLLM is not installed. Run pip install -r backend/requirements.txt.")
-        if not model.api_key:
+        route = model.route
+        if route is None:
             raise DebateError(f"{model.api_key_env} is missing for {model.name}.")
 
         generation_settings = session_settings or {}
+        fitted_messages = self._fit_messages_to_model(
+            messages,
+            model_name=model.name,
+            reserve_tokens=int(generation_settings.get("max_tokens", 700)) + 600,
+        )
         max_attempts = 3
         for attempt in range(max_attempts):
             try:
@@ -2134,7 +2751,8 @@ class DebateManager:
                     websocket,
                     stream_id,
                     model,
-                    messages,
+                    route,
+                    fitted_messages,
                     generation_settings,
                 )
                 if finish_reason in {"length", "max_tokens"}:
@@ -2142,14 +2760,14 @@ class DebateManager:
                         websocket,
                         stream_id,
                         model,
-                        messages,
+                        fitted_messages,
                         content,
                         generation_settings,
                     )
                 if cost_tracker is not None:
                     cost_tracker.record_call(
                         model_name=model.name,
-                        input_text=message_input_text(messages),
+                        input_text=message_input_text(fitted_messages),
                         output_text=content,
                         operation=cost_operation,
                     )
@@ -2162,6 +2780,7 @@ class DebateManager:
             except ClientDisconnectedError:
                 raise
             except CompletionStreamError as exc:
+                self._maybe_disable_model_route(model, exc.original)
                 if self._is_client_disconnect_error(exc.original):
                     raise ClientDisconnectedError(
                         "Browser disconnected before the response finished."
@@ -2184,48 +2803,62 @@ class DebateManager:
         websocket: WebSocket,
         stream_id: str,
         model: SupportedModel,
+        route,
         messages: list[dict[str, str]],
         generation_settings: dict[str, Any],
     ) -> tuple[str, str | None]:
         parts: list[str] = []
         finish_reason: str | None = None
         sanitizer = StreamingSanitizer()
-        try:
-            response = await acompletion(
-                model=model.litellm_model,
-                messages=messages,
-                api_key=model.api_key,
-                stream=True,
-                temperature=float(generation_settings.get("temperature", 0.55)),
-                max_tokens=int(generation_settings.get("max_tokens", 700)),
-                timeout=settings.request_timeout_seconds,
-            )
-            async for chunk in response:
-                finish_reason = self._extract_finish_reason(chunk) or finish_reason
-                delta = self._extract_delta(chunk)
-                if not delta:
-                    continue
-                visible_delta = sanitizer.push(delta)
-                if not visible_delta:
-                    continue
-                parts.append(visible_delta)
-                await self._send_json(
-                    websocket,
-                    {"type": "message_delta", "stream_id": stream_id, "delta": visible_delta}
+        candidate_models = (route.litellm_model, *route.fallback_models)
+        last_exc: Exception | None = None
+        for candidate_model in candidate_models:
+            sanitizer = StreamingSanitizer()
+            parts = []
+            finish_reason = None
+            try:
+                response = await acompletion(
+                    model=candidate_model,
+                    messages=messages,
+                    api_key=route.api_key,
+                    stream=True,
+                    temperature=float(generation_settings.get("temperature", 0.55)),
+                    max_tokens=int(generation_settings.get("max_tokens", 700)),
+                    timeout=settings.request_timeout_seconds,
                 )
-            tail = sanitizer.flush()
-            if tail:
-                parts.append(tail)
-                await self._send_json(
-                    websocket,
-                    {"type": "message_delta", "stream_id": stream_id, "delta": tail}
-                )
-        except Exception as exc:
-            if self._is_client_disconnect_error(exc):
-                raise ClientDisconnectedError(
-                    "Browser disconnected before the response finished."
-                ) from exc
-            raise CompletionStreamError(exc, had_output=bool(parts)) from exc
+                async for chunk in response:
+                    finish_reason = self._extract_finish_reason(chunk) or finish_reason
+                    delta = self._extract_delta(chunk)
+                    if not delta:
+                        continue
+                    visible_delta = sanitizer.push(delta)
+                    if not visible_delta:
+                        continue
+                    parts.append(visible_delta)
+                    await self._send_json(
+                        websocket,
+                        {"type": "message_delta", "stream_id": stream_id, "delta": visible_delta}
+                    )
+                tail = sanitizer.flush()
+                if tail:
+                    parts.append(tail)
+                    await self._send_json(
+                        websocket,
+                        {"type": "message_delta", "stream_id": stream_id, "delta": tail}
+                    )
+                break
+            except Exception as exc:
+                last_exc = exc
+                if self._is_client_disconnect_error(exc):
+                    raise ClientDisconnectedError(
+                        "Browser disconnected before the response finished."
+                    ) from exc
+                if route.source == "github_models" and self._is_github_unknown_model_error(exc):
+                    continue
+                raise CompletionStreamError(exc, had_output=bool(parts)) from exc
+        else:
+            assert last_exc is not None
+            raise CompletionStreamError(last_exc, had_output=False) from last_exc
 
         content = sanitize_model_text("".join(parts)).strip()
         if not content:
@@ -2263,10 +2896,14 @@ class DebateManager:
                 {"type": "message_delta", "stream_id": stream_id, "delta": separator}
             )
         try:
+            route = model.route
+            if route is None:
+                raise DebateError(f"{model.api_key_env} is missing for {model.name}.")
             continuation, finish_reason = await self._stream_completion_once(
                 websocket,
                 stream_id,
                 model,
+                route,
                 continuation_messages,
                 continuation_settings,
             )
@@ -2339,14 +2976,38 @@ class DebateManager:
         transcript: list[dict[str, Any]],
         session_settings: dict[str, Any],
         generation_settings: dict[str, Any],
+        model: SupportedModel,
         intelligence_context: str = "",
     ) -> list[dict[str, str]]:
         latest_speaker = transcript[-1]["speaker"] if transcript else "the previous speaker"
         previous_debate = self._format_transcript(
-            self._context_slice(transcript, int(session_settings.get("context_window", 2)))
+            self._transcript_for_model(
+                transcript,
+                model_name=model.name,
+                reserve_tokens=int(generation_settings.get("max_tokens", 700)) + 1400,
+                hard_turn_cap=24,
+                context_window=int(session_settings.get("context_window", 2)),
+                topic=topic,
+            )
+        )
+        topic_anchor = self._trim_prompt_block(
+            self._topic_anchor_text(topic, transcript=transcript),
+            220,
+            char_cap=1200,
         )
         response_length = generation_settings.get("response_length", "Normal")
         word_limit = {"Concise": 120, "Normal": 180, "Detailed": 260}.get(response_length, 180)
+        intelligence_excerpt = self._trim_prompt_block(intelligence_context, 900, char_cap=5000)
+        recent_self_turns = [
+            self._clip_for_prompt(str(turn.get("content", "")), 200)
+            for turn in transcript
+            if turn.get("speaker") == agent["speaker"]
+        ][-2:]
+        repetition_guard = (
+            "\nRecent points you already made:\n- " + "\n- ".join(recent_self_turns)
+            if recent_self_turns
+            else "\nNo prior turns from you yet."
+        )
         advanced_notes = []
         if agent["archetype"] == "evidence_researcher" and generation_settings.get("agent_web_search"):
             advanced_notes.append(
@@ -2369,7 +3030,8 @@ class DebateManager:
         }.get(phase_kind, "Complete this debate phase naturally and stay in role.")
         user_prompt = dedent(
             f"""
-            Topic: {topic}
+            Debate anchor:
+            {topic_anchor}
 
             Current phase: {phase["title"]} ({phase["index"]}/{phase["total"]})
             Phase goal: {phase["intent"]}
@@ -2382,7 +3044,8 @@ class DebateManager:
             Latest speaker to answer: {latest_speaker}.
 
             Team notebook, experience, and pressure state:
-            {intelligence_context or "No structured debate intelligence is available yet."}
+            {intelligence_excerpt or "No structured debate intelligence is available yet."}
+            {repetition_guard}
 
             Speak naturally as {agent["speaker"]}. Address another debater directly when useful, like a human debate.
             Prefer direct phrasing such as "{latest_speaker}, you said..." or "I disagree with your point about...".
@@ -2391,6 +3054,7 @@ class DebateManager:
             Phase-specific rules: {phase_rules}
             Do your role's job, stay on the {agent["stance_label"]}, and keep this turn under {word_limit} words.
             If you disagree, say exactly what you disagree with and why. If you add evidence, explain how it changes the debate.
+            Add at least one genuinely new move relative to your earlier turns: answer a challenge, add evidence, concede a limit, or sharpen the clash. Do not just restate your previous paragraph with synonyms.
             """
         ).strip()
         return [
@@ -2423,10 +3087,26 @@ class DebateManager:
         analysis: dict[str, Any],
         session_settings: dict[str, Any],
         generation_settings: dict[str, Any],
+        model: SupportedModel,
         intelligence_context: str = "",
     ) -> list[dict[str, str]]:
         response_length = generation_settings.get("response_length", "Normal")
         word_limit = {"Concise": 220, "Normal": 340, "Detailed": 520}.get(response_length, 340)
+        transcript_excerpt = self._format_transcript(
+            self._transcript_for_model(
+                transcript,
+                model_name=model.name,
+                reserve_tokens=int(generation_settings.get("max_tokens", 700)) + 1800,
+                hard_turn_cap=48,
+                topic=topic,
+            )
+        )
+        topic_anchor = self._trim_prompt_block(
+            self._topic_anchor_text(topic, transcript=transcript),
+            240,
+            char_cap=1400,
+        )
+        intelligence_excerpt = self._trim_prompt_block(intelligence_context, 1000, char_cap=6000)
         return [
             {
                 "role": "system",
@@ -2446,16 +3126,17 @@ class DebateManager:
                 "role": "user",
                 "content": dedent(
                     f"""
-                    Topic: {topic}
+                    Debate anchor:
+                    {topic_anchor}
 
                     Transcript:
-                    {self._format_transcript(transcript)}
+                    {transcript_excerpt}
 
                     Debate analytics:
                     {format_analytics_report(analysis)}
 
                     Structured debate intelligence:
-                    {intelligence_context or "No structured debate intelligence is available yet."}
+                    {intelligence_excerpt or "No structured debate intelligence is available yet."}
 
                     Produce a Judge Assistant audit under {word_limit} words:
                     - Strongest Pro points
@@ -2478,16 +3159,36 @@ class DebateManager:
         analysis: dict[str, Any],
         session_settings: dict[str, Any],
         generation_settings: dict[str, Any],
+        model: SupportedModel,
         judge_assistant_report: str,
         intelligence_context: str = "",
     ) -> list[dict[str, str]]:
-        assistant_section = judge_assistant_report or "Judge Assistant disabled for this debate."
+        assistant_section = self._trim_prompt_block(
+            judge_assistant_report or "Judge Assistant disabled for this debate.",
+            900,
+            char_cap=5000,
+        )
         response_length = generation_settings.get("response_length", "Normal")
         configured_word_limit = {"Concise": 220, "Normal": 360, "Detailed": 560}.get(
             response_length, 360
         )
         token_word_limit = max(140, int(int(generation_settings.get("max_tokens", 700)) * 0.5))
         word_limit = min(configured_word_limit, token_word_limit)
+        transcript_excerpt = self._format_transcript(
+            self._transcript_for_model(
+                transcript,
+                model_name=model.name,
+                reserve_tokens=int(generation_settings.get("max_tokens", 700)) + 2200,
+                hard_turn_cap=56,
+                topic=topic,
+            )
+        )
+        topic_anchor = self._trim_prompt_block(
+            self._topic_anchor_text(topic, transcript=transcript),
+            260,
+            char_cap=1500,
+        )
+        intelligence_excerpt = self._trim_prompt_block(intelligence_context, 1100, char_cap=7000)
         return [
             {
                 "role": "system",
@@ -2496,6 +3197,9 @@ class DebateManager:
                     "Never mention that the user wants you to judge. Never expose hidden reasoning or <think> blocks. "
                     "The transcript is phase-structured; respect what each phase was supposed to do. "
                     "Give a concrete, confident verdict. Pick a winner, state exactly why, and identify what would change your mind. "
+                    "Start with a single unmistakable first line in exactly one of these forms: "
+                    "'WINNER: Pro', 'WINNER: Con', or 'WINNER: Unclear'. "
+                    "On the second line, write 'Reason: ...' in one sentence. "
                     "If space is tight, use shorter bullets instead of leaving the verdict unfinished."
                 ),
             },
@@ -2503,10 +3207,11 @@ class DebateManager:
                 "role": "user",
                 "content": dedent(
                     f"""
-                    Topic: {topic}
+                    Debate anchor:
+                    {topic_anchor}
 
                     Transcript:
-                    {self._format_transcript(transcript)}
+                    {transcript_excerpt}
 
                     Judge Assistant audit:
                     {assistant_section}
@@ -2515,12 +3220,14 @@ class DebateManager:
                     {format_analytics_report(analysis)}
 
                     Structured debate intelligence and scorecard inputs:
-                    {intelligence_context or "No structured debate intelligence is available yet."}
+                    {intelligence_excerpt or "No structured debate intelligence is available yet."}
 
                     Judge mode: {session_settings.get("judge_mode", "Hybrid")}
                     Evidence strictness: {session_settings.get("evidence_strictness", "Normal")}
 
                     Produce a concise verdict with:
+                    0. First line: WINNER: Pro, WINNER: Con, or WINNER: Unclear
+                    0b. Second line: Reason: one-sentence explanation
                     1. Best affirmative argument
                     2. Best skeptical argument
                     3. Best evidence or research need
@@ -2543,9 +3250,14 @@ class DebateManager:
         user_message: str,
         session_settings: dict[str, Any],
         generation_settings: dict[str, Any],
+        model: SupportedModel,
     ) -> list[dict[str, str]]:
-        history = self.db.list_messages(session_id, include_hidden=True)[-18:]
-        system_context = self._system_context(session_id)
+        history = self._chat_history_for_model(
+            self.db.list_messages(session_id, include_hidden=True),
+            model_name=model.name,
+            reserve_tokens=int(generation_settings.get("max_tokens", 700)) + 1400,
+        )
+        system_context = self._trim_prompt_block(self._system_context(session_id), 1000, char_cap=6000)
         formatted_history = "\n".join(
             f"{message['speaker']} ({message['role']}): {message['content']}"
             for message in history
@@ -2618,13 +3330,14 @@ class DebateManager:
         *,
         session_id: str | None = None,
     ) -> dict[str, Any]:
-        if not settings.mock_llm and acompletion is not None and model.api_key:
+        route = model.route
+        if not settings.mock_llm and acompletion is not None and route is not None:
             try:
                 messages = self._safety_lock_messages(content)
                 response = await acompletion(
-                    model=model.litellm_model,
+                    model=route.litellm_model,
                     messages=messages,
-                    api_key=model.api_key,
+                    api_key=route.api_key,
                     stream=False,
                     temperature=0.0,
                     max_tokens=120,
@@ -2642,6 +3355,7 @@ class DebateManager:
                 if parsed:
                     return parsed
             except Exception as exc:
+                self._maybe_disable_model_route(model, exc)
                 runtime_diary.record(
                     "backend terminal",
                     "safety lock classifier fallback",
@@ -2731,13 +3445,14 @@ class DebateManager:
         *,
         session_id: str | None = None,
     ) -> str:
-        if not settings.mock_llm and acompletion is not None and model.api_key:
+        route = model.route
+        if not settings.mock_llm and acompletion is not None and route is not None:
             try:
                 messages = self._intent_classifier_messages(content, session_id)
                 response = await acompletion(
-                    model=model.litellm_model,
+                    model=route.litellm_model,
                     messages=messages,
-                    api_key=model.api_key,
+                    api_key=route.api_key,
                     stream=False,
                     temperature=0.0,
                     max_tokens=80,
@@ -2754,7 +3469,8 @@ class DebateManager:
                 parsed_intent = self._parse_intent_response(text)
                 if parsed_intent:
                     return parsed_intent
-            except Exception:
+            except Exception as exc:
+                self._maybe_disable_model_route(model, exc)
                 pass
 
         fallback = self._heuristic_intent(content)
@@ -2889,23 +3605,14 @@ class DebateManager:
         )
 
     def _context_slice(self, transcript: list[dict[str, Any]], context_window: int) -> list[dict[str, Any]]:
-        if context_window <= 0:
-            return []
-        turn_limit = min(context_window * 8, 24)
-        char_budget = 12000
-        per_turn_limit = 1200
-        selected: list[dict[str, Any]] = []
-        used_chars = 0
-        for turn in reversed(transcript[-turn_limit:]):
-            content = str(turn.get("content", ""))
-            if len(content) > per_turn_limit:
-                content = f"{content[:per_turn_limit].rstrip()}..."
-            projected = used_chars + len(content)
-            if selected and projected > char_budget:
-                break
-            selected.append({**turn, "content": content})
-            used_chars = projected
-        return list(reversed(selected))
+        return self._transcript_for_model(
+            transcript,
+            model_name="gpt-4o-mini",
+            reserve_tokens=1800,
+            hard_turn_cap=24,
+            context_window=context_window,
+            topic=None,
+        )
 
     def _format_transcript(self, transcript: list[dict[str, Any]]) -> str:
         if not transcript:

@@ -97,7 +97,7 @@ export default function Home() {
   const selectedDraft = selectedId ? draftBySession[selectedId] ?? "" : "";
   const selectedSettings = selectedId ? settingsBySession[selectedId] ?? null : null;
   const selectedModelName = selectedId
-    ? selectedSettings?.overall_model || modelBySession[selectedId] || ""
+    ? modelBySession[selectedId] || selectedSettings?.overall_model || ""
     : "";
   const selectedStatus = selectedId
     ? statusBySession[selectedId] ?? "Ready for a message."
@@ -115,6 +115,12 @@ export default function Home() {
     const nextSessions = await listSessions();
     setSessions(nextSessions);
     return nextSessions;
+  }, []);
+
+  const refreshModels = useCallback(async () => {
+    const nextModels = await getModels();
+    setModels(nextModels);
+    return nextModels;
   }, []);
 
   const refreshMessages = useCallback(async (sessionId: string) => {
@@ -175,7 +181,7 @@ export default function Home() {
       try {
         const [sessionList, modelData, councilData] = await Promise.all([
           listSessions(),
-          getModels(),
+          refreshModels(),
           getCouncilSettings()
         ]);
         if (cancelled) {
@@ -188,7 +194,7 @@ export default function Home() {
         setSelectedId(sessionList[0]?.id ?? null);
         recordRuntimeDiary(
           "frontend boot",
-          `Loaded ${sessionList.length} session(s) and ${modelData.available_model_count} unlocked model(s).`
+          `Loaded ${sessionList.length} session(s) and ${modelData.available_model_count} verified model(s).`
         );
       } catch (exc) {
         setError(exc instanceof Error ? exc.message : "Startup failed.");
@@ -203,7 +209,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [refreshModels]);
 
   useEffect(() => {
     return () => {
@@ -583,7 +589,7 @@ export default function Home() {
       if (!sentStart && !serverStarted && attempt < WEBSOCKET_CONNECT_RETRIES) {
         setStatusBySession((current) => ({
           ...current,
-          [sessionId]: `Connection failed. Retrying (${attempt + 1}/${WEBSOCKET_CONNECT_RETRIES})...`
+          [sessionId]: "Connection issue detected. Waiting for reconnect..."
         }));
         return;
       }
@@ -609,6 +615,10 @@ export default function Home() {
         sessionId
       );
       if (!sentStart && !serverStarted && attempt < WEBSOCKET_CONNECT_RETRIES) {
+        setStatusBySession((current) => ({
+          ...current,
+          [sessionId]: `Connection failed. Retrying (${attempt + 1}/${WEBSOCKET_CONNECT_RETRIES})...`
+        }));
         retryTimerRefs.current[sessionId] = setTimeout(() => {
           openInteractionSocket(sessionId, content, modelName, attempt + 1);
         }, WEBSOCKET_RETRY_DELAY_MS);
@@ -790,6 +800,7 @@ export default function Home() {
       setRunningBySession((current) => ({ ...current, [sessionId]: false }));
       socketRefs.current[sessionId]?.close();
       refreshSessions().catch(() => undefined);
+      refreshModels().catch(() => undefined);
       refreshMessages(sessionId).catch(() => undefined);
       refreshDebates(sessionId).catch(() => undefined);
       refreshAnalytics(sessionId).catch(() => undefined);
@@ -802,6 +813,7 @@ export default function Home() {
       setStatusBySession((current) => ({ ...current, [sessionId]: "Stopped." }));
       setRunningBySession((current) => ({ ...current, [sessionId]: false }));
       socketRefs.current[sessionId]?.close();
+      refreshModels().catch(() => undefined);
     }
   }
 
