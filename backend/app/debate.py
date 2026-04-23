@@ -444,17 +444,15 @@ class DebateManager:
                 )
 
             judge_settings = self._settings_snapshot(session_id)
-            judge_model = self._resolve_agent_model(judge_settings, "judge", selected_model)
-            judge_summary = await self._stream_judge_turn(
+            judge_summary = await self._stream_final_judgment(
                 websocket=websocket,
                 session_id=session_id,
                 debate_id=debate_id,
                 topic=cleaned_topic,
-                model=judge_model,
+                selected_model=selected_model,
                 transcript=transcript,
                 analysis=latest_analysis,
                 session_settings=judge_settings,
-                generation_settings=self._agent_generation_settings(judge_settings, "judge"),
                 judge_assistant_report=judge_assistant_report,
                 cost_tracker=cost_tracker,
                 intelligence_context=self._intelligence_context(
@@ -920,17 +918,15 @@ class DebateManager:
                 intelligence_context=self._practice_profile_context(session_settings),
             )
             transcript = self._practice_transcript(session_id, debate_id, human_side, ai_side)
-        judge_model = self._resolve_agent_model(session_settings, "judge", selected_model)
-        judge_summary = await self._stream_judge_turn(
+        judge_summary = await self._stream_final_judgment(
             websocket=websocket,
             session_id=session_id,
             debate_id=debate_id,
             topic=topic,
-            model=judge_model,
+            selected_model=selected_model,
             transcript=transcript,
             analysis=analysis,
             session_settings=session_settings,
-            generation_settings=self._agent_generation_settings(session_settings, "judge"),
             judge_assistant_report=judge_assistant_report,
             cost_tracker=cost_tracker,
             intelligence_context=self._practice_profile_context(session_settings),
@@ -2899,6 +2895,194 @@ class DebateManager:
             reason_line = f"Reason: The judge did not clearly resolve a winner for {self._clip_for_prompt(topic, 120)}."
         return f"{winner_labels[winner]}\n{reason_line}\n\n{cleaned}"
 
+    def _judging_settings(self, session_settings: dict[str, Any]) -> dict[str, Any]:
+        raw = session_settings.get("judging_settings")
+        payload = raw if isinstance(raw, dict) else {}
+        try:
+            panel_size = int(payload.get("judge_panel_size", 1))
+        except (TypeError, ValueError):
+            panel_size = 1
+        if panel_size not in {1, 3, 5}:
+            panel_size = 1
+        try:
+            analytics_weight = float(payload.get("analytics_weight", 0.25))
+        except (TypeError, ValueError):
+            analytics_weight = 0.25
+        return {
+            "judge_panel_size": panel_size,
+            "analytics_weight": max(0.0, min(0.75, analytics_weight)),
+            "allow_user_verdict_challenge": bool(
+                payload.get("allow_user_verdict_challenge", True)
+            ),
+        }
+
+    def _analytics_verdict_signal(self, analysis: dict[str, Any]) -> dict[str, Any]:
+        probabilities = (
+            analysis.get("bayesian", {}).get("probabilities", {})
+            if isinstance(analysis, dict)
+            else {}
+        )
+        values = {
+            "support": self._safe_float(probabilities.get("support"), 0.0),
+            "oppose": self._safe_float(probabilities.get("oppose"), 0.0),
+            "mixed": self._safe_float(probabilities.get("mixed"), 0.0),
+        }
+        if not any(values.values()):
+            return {
+                "winner": "unclear",
+                "leader": "mixed",
+                "confidence": 0.0,
+                "probabilities": values,
+            }
+        leader = max(values, key=values.get)
+        winner_by_leader = {"support": "pro", "oppose": "con", "mixed": "unclear"}
+        winner = winner_by_leader.get(leader, "unclear")
+        confidence = max(0.0, min(1.0, values[leader]))
+        if confidence < 0.38:
+            winner = "unclear"
+        return {
+            "winner": winner,
+            "leader": leader,
+            "confidence": confidence,
+            "probabilities": values,
+        }
+
+    def _weighted_verdict_result(
+        self,
+        ai_votes: list[str],
+        analysis: dict[str, Any],
+        session_settings: dict[str, Any],
+    ) -> dict[str, Any]:
+        judging = self._judging_settings(session_settings)
+        analytics_weight = judging["analytics_weight"]
+        vote_counts = {"pro": 0, "con": 0, "unclear": 0}
+        for vote in ai_votes:
+            vote_counts[vote if vote in vote_counts else "unclear"] += 1
+        total_votes = max(1, sum(vote_counts.values()))
+        scores = {
+            side: (1.0 - analytics_weight) * (count / total_votes)
+            for side, count in vote_counts.items()
+        }
+        analytics_signal = self._analytics_verdict_signal(analysis)
+        signal_winner = str(analytics_signal.get("winner") or "unclear")
+        confidence = self._safe_float(analytics_signal.get("confidence"), 0.0)
+        if signal_winner not in scores:
+            signal_winner = "unclear"
+        scores[signal_winner] += analytics_weight * confidence
+        scores["unclear"] += analytics_weight * (1.0 - confidence)
+        ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        winner = ranked[0][0]
+        if len(ranked) > 1 and ranked[0][1] - ranked[1][1] < 0.04:
+            winner = "unclear"
+        return {
+            "winner": winner,
+            "scores": {key: round(value, 3) for key, value in scores.items()},
+            "vote_counts": vote_counts,
+            "analytics_signal": analytics_signal,
+            "analytics_weight": analytics_weight,
+        }
+
+    def _safe_float(self, value: object, default: float = 0.0) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    def _winner_label(self, winner: str) -> str:
+        return {"pro": "Pro", "con": "Con", "unclear": "Unclear"}.get(winner, "Unclear")
+
+    def _summary_without_verdict_header(self, summary: str) -> str:
+        lines = summary.splitlines()
+        while lines and not lines[0].strip():
+            lines.pop(0)
+        if lines and lines[0].strip().upper().startswith("WINNER:"):
+            lines.pop(0)
+        while lines and not lines[0].strip():
+            lines.pop(0)
+        if lines and lines[0].strip().lower().startswith("reason:"):
+            lines.pop(0)
+        return "\n".join(lines).strip()
+
+    def _apply_analytics_weighted_summary(
+        self,
+        summary: str,
+        topic: str,
+        analysis: dict[str, Any],
+        session_settings: dict[str, Any],
+    ) -> str:
+        normalized = self._normalize_judge_summary(summary, topic)
+        ai_winner = self._detect_winner(normalized)
+        result = self._weighted_verdict_result([ai_winner], analysis, session_settings)
+        final_winner = result["winner"]
+        signal = result["analytics_signal"]
+        scores = result["scores"]
+        reason = (
+            f"The AI Judge voted {self._winner_label(ai_winner)}, while analytics signaled "
+            f"{self._winner_label(str(signal.get('winner') or 'unclear'))} with "
+            f"{round(self._safe_float(signal.get('confidence')) * 100)}% confidence; "
+            f"the weighted result favors {self._winner_label(final_winner)}."
+        )
+        note = (
+            f"Weighted verdict note: analytics weight {round(result['analytics_weight'] * 100)}%. "
+            f"Scores: Pro {scores['pro']}, Con {scores['con']}, Unclear {scores['unclear']}."
+        )
+        body = self._summary_without_verdict_header(normalized)
+        return (
+            f"WINNER: {self._winner_label(final_winner)}\n"
+            f"Reason: {reason}\n\n"
+            f"{note}\n\n"
+            f"{body}"
+        ).strip()
+
+    def _compose_panel_consensus_summary(
+        self,
+        *,
+        topic: str,
+        panel_summaries: list[str],
+        analysis: dict[str, Any],
+        session_settings: dict[str, Any],
+    ) -> str:
+        panel_votes = [self._detect_winner(summary) for summary in panel_summaries]
+        result = self._weighted_verdict_result(panel_votes, analysis, session_settings)
+        signal = result["analytics_signal"]
+        scores = result["scores"]
+        vote_counts = result["vote_counts"]
+        final_winner = result["winner"]
+        vote_text = (
+            f"Pro {vote_counts['pro']}, Con {vote_counts['con']}, "
+            f"Unclear {vote_counts['unclear']}"
+        )
+        reason = (
+            f"The independent judge panel voted {vote_text}; analytics signaled "
+            f"{self._winner_label(str(signal.get('winner') or 'unclear'))} at "
+            f"{round(self._safe_float(signal.get('confidence')) * 100)}% confidence. "
+            f"After weighting, {self._winner_label(final_winner)} is the final verdict."
+        )
+        panel_notes = []
+        for index, summary in enumerate(panel_summaries, start=1):
+            winner = self._winner_label(self._detect_winner(summary))
+            body = self._summary_without_verdict_header(self._normalize_judge_summary(summary, topic))
+            panel_notes.append(
+                f"{index}. Judge Panelist {index}: {winner}. "
+                f"{self._clip_for_prompt(body, 240) or 'No short rationale captured.'}"
+            )
+        return dedent(
+            f"""
+            WINNER: {self._winner_label(final_winner)}
+            Reason: {reason}
+
+            Panel votes: {vote_text}.
+            Analytics weight: {round(result['analytics_weight'] * 100)}%.
+            Weighted scores: Pro {scores['pro']}, Con {scores['con']}, Unclear {scores['unclear']}.
+
+            Panel rationales:
+            {chr(10).join(panel_notes)}
+
+            Clear winner: {self._winner_label(final_winner)}
+            Why it wins: the final decision combines independent AI judge votes with the tracked claim/challenge/evidence analytics instead of relying on one unstructured verdict.
+            """
+        ).strip()
+
     def _post_debate_review_text(self, topic: str, scorecard: dict[str, Any], judge_summary: str) -> str:
         return dedent(
             f"""
@@ -3088,6 +3272,144 @@ class DebateManager:
         )
         return content
 
+    async def _stream_final_judgment(
+        self,
+        *,
+        websocket: WebSocket,
+        session_id: str,
+        debate_id: str,
+        topic: str,
+        selected_model: SupportedModel,
+        transcript: list[dict[str, Any]],
+        analysis: dict[str, Any],
+        session_settings: dict[str, Any],
+        judge_assistant_report: str,
+        cost_tracker: CostTracker | None = None,
+        intelligence_context: str = "",
+    ) -> str:
+        judging = self._judging_settings(session_settings)
+        judge_model = self._resolve_agent_model(session_settings, "judge", selected_model)
+        generation_settings = self._agent_generation_settings(session_settings, "judge")
+        panel_size = int(judging["judge_panel_size"])
+        if panel_size == 1:
+            return await self._stream_judge_turn(
+                websocket=websocket,
+                session_id=session_id,
+                debate_id=debate_id,
+                topic=topic,
+                model=judge_model,
+                transcript=transcript,
+                analysis=analysis,
+                session_settings=session_settings,
+                generation_settings=generation_settings,
+                judge_assistant_report=judge_assistant_report,
+                cost_tracker=cost_tracker,
+                intelligence_context=intelligence_context,
+                apply_weighted_verdict=True,
+            )
+
+        panel_summaries: list[str] = []
+        temperature_offsets = [-0.08, 0.08, 0.0, -0.14, 0.14]
+        for index in range(panel_size):
+            panel_generation = dict(generation_settings)
+            panel_generation["temperature"] = max(
+                0.0,
+                min(
+                    1.0,
+                    self._safe_float(generation_settings.get("temperature"), 0.55)
+                    + temperature_offsets[index],
+                ),
+            )
+            panel_summaries.append(
+                await self._stream_judge_turn(
+                    websocket=websocket,
+                    session_id=session_id,
+                    debate_id=debate_id,
+                    topic=topic,
+                    model=judge_model,
+                    transcript=transcript,
+                    analysis=analysis,
+                    session_settings=session_settings,
+                    generation_settings=panel_generation,
+                    judge_assistant_report=judge_assistant_report,
+                    cost_tracker=cost_tracker,
+                    intelligence_context=intelligence_context,
+                    role="judge_panelist",
+                    speaker=f"Judge Panelist {index + 1}",
+                    panelist_index=index + 1,
+                    apply_weighted_verdict=False,
+                )
+            )
+
+        consensus = self._compose_panel_consensus_summary(
+            topic=topic,
+            panel_summaries=panel_summaries,
+            analysis=analysis,
+            session_settings=session_settings,
+        )
+        return await self._stream_static_judge_summary(
+            websocket=websocket,
+            session_id=session_id,
+            debate_id=debate_id,
+            model_name=f"{judge_model.name} panel consensus",
+            content=consensus,
+            cost_tracker=cost_tracker,
+            session_settings=session_settings,
+        )
+
+    async def _stream_static_judge_summary(
+        self,
+        *,
+        websocket: WebSocket,
+        session_id: str,
+        debate_id: str,
+        model_name: str,
+        content: str,
+        cost_tracker: CostTracker | None,
+        session_settings: dict[str, Any],
+    ) -> str:
+        stream_id = str(uuid4())
+        await self._send_json(
+            websocket,
+            {
+                "type": "message_started",
+                "stream_id": stream_id,
+                "message": {
+                    "id": stream_id,
+                    "session_id": session_id,
+                    "debate_id": debate_id,
+                    "role": "judge",
+                    "speaker": "Judge",
+                    "model": model_name,
+                    "content": "",
+                    "sequence": 0,
+                    "created_at": utc_now(),
+                },
+                "round": "summary",
+            },
+        )
+        await self._send_json(
+            websocket,
+            {"type": "message_replaced", "stream_id": stream_id, "content": content},
+        )
+        saved = self.db.add_message(
+            session_id=session_id,
+            debate_id=debate_id,
+            role="judge",
+            speaker="Judge",
+            model=model_name,
+            content=content,
+            cost_summary=None,
+            debate_cost_summary=cost_tracker.summary(session_settings.get("cost_currency", "USD"))
+            if cost_tracker
+            else None,
+        )
+        await self._send_json(
+            websocket,
+            {"type": "message_completed", "stream_id": stream_id, "message": saved},
+        )
+        return content
+
     async def _stream_judge_turn(
         self,
         *,
@@ -3103,6 +3425,10 @@ class DebateManager:
         judge_assistant_report: str,
         cost_tracker: CostTracker | None = None,
         intelligence_context: str = "",
+        role: str = "judge",
+        speaker: str = "Judge",
+        panelist_index: int | None = None,
+        apply_weighted_verdict: bool = True,
     ) -> str:
         stream_id = str(uuid4())
         await self._send_json(
@@ -3114,8 +3440,8 @@ class DebateManager:
                     "id": stream_id,
                     "session_id": session_id,
                     "debate_id": debate_id,
-                    "role": "judge",
-                    "speaker": "Judge",
+                    "role": role,
+                    "speaker": speaker,
                     "model": model.name,
                     "content": "",
                     "sequence": 0,
@@ -3134,6 +3460,12 @@ class DebateManager:
             judge_assistant_report,
             intelligence_context,
         )
+        if panelist_index is not None:
+            messages[0]["content"] = (
+                f"You are Judge Panelist {panelist_index}. Vote independently from the other panelists. "
+                "Do not try to predict or harmonize with the panel. "
+                + messages[0]["content"]
+            )
         cost_start = len(cost_tracker.entries) if cost_tracker else 0
         try:
             content = await self._stream_completion(
@@ -3143,9 +3475,13 @@ class DebateManager:
                 messages,
                 session_settings=generation_settings,
                 cost_tracker=cost_tracker,
-                cost_operation="Judge",
+                cost_operation=speaker,
             )
             content = self._normalize_judge_summary(content, topic)
+            if apply_weighted_verdict:
+                content = self._apply_analytics_weighted_summary(
+                    content, topic, analysis, session_settings
+                )
             await self._send_json(
                 websocket,
                 {"type": "message_replaced", "stream_id": stream_id, "content": content}
@@ -3158,8 +3494,8 @@ class DebateManager:
                 stream_id=stream_id,
                 session_id=session_id,
                 debate_id=debate_id,
-                role="judge",
-                speaker="Judge",
+                role=role,
+                speaker=speaker,
                 model=model.name,
                 exc=exc,
                 cost_summary=cost_tracker.summary_since(
@@ -3175,8 +3511,8 @@ class DebateManager:
         saved = self.db.add_message(
             session_id=session_id,
             debate_id=debate_id,
-            role="judge",
-            speaker="Judge",
+            role=role,
+            speaker=speaker,
             model=model.name,
             content=content,
             cost_summary=cost_tracker.summary_since(

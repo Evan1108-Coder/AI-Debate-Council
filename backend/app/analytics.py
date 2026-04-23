@@ -309,7 +309,15 @@ def _win_rate_by_team(debates: list[dict[str, Any]]) -> dict[str, Any]:
     for debate in debates:
         if str(debate.get("status") or "") != "completed":
             continue
-        winner = _infer_debate_winner(str(debate.get("judge_summary") or ""))
+        metadata = debate.get("metadata") if isinstance(debate.get("metadata"), dict) else {}
+        override = metadata.get("user_verdict_override") if isinstance(metadata, dict) else None
+        winner = (
+            str(override.get("winner") or "").lower()
+            if isinstance(override, dict)
+            else ""
+        )
+        if winner not in counts:
+            winner = _infer_debate_winner(str(debate.get("judge_summary") or ""))
         counts[winner] += 1
     resolved = counts["pro"] + counts["con"]
     return {
@@ -390,7 +398,7 @@ def _cost_by_phase(messages: list[dict[str, Any]]) -> dict[str, float]:
 def _phase_cost_label(message: dict[str, Any]) -> str:
     role = str(message.get("role") or "")
     kind = str(message.get("phase_kind") or "")
-    if role in {"judge", "judge_assistant"}:
+    if role in {"judge", "judge_assistant", "judge_panelist"}:
         return "Judgment"
     if kind == "constructive":
         return "Constructive"

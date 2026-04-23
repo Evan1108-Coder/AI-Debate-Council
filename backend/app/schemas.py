@@ -80,6 +80,13 @@ class SessionSettingsUpdate(BaseModel):
     judge_mode: str | None = None
     evidence_strictness: str | None = None
     practice_settings: dict | None = None
+    judging_settings: dict | None = None
+
+
+class VerdictReviewRequest(BaseModel):
+    action: str = Field(pattern="^(challenge|override)$")
+    winner: str = Field(default="unclear", pattern="^(pro|con|unclear)$")
+    note: str = Field(default="", max_length=1200)
 
 
 class DebateIntelligenceRecord(BaseModel):

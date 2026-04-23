@@ -116,6 +116,7 @@ export type DebateIntelligence = {
   challenges: DebateIntelligenceRecord[];
   evidence: DebateIntelligenceRecord[];
   scorecards: DebateIntelligenceRecord[];
+  verdict_reviews: DebateIntelligenceRecord[];
   values: DebateIntelligenceRecord[];
   memories: DebateIntelligenceRecord[];
   reviews: DebateIntelligenceRecord[];
@@ -163,6 +164,11 @@ export type SessionSettings = {
   judge_mode: string;
   evidence_strictness: string;
   practice_settings: PracticeSettings;
+  judging_settings: {
+    judge_panel_size: 1 | 3 | 5;
+    analytics_weight: number;
+    allow_user_verdict_challenge: boolean;
+  };
   updated_at?: string;
 };
 

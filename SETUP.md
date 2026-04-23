@@ -116,7 +116,12 @@ npm run dev -- -p 6001
 http://localhost:6001
 ```
 
-Click the **+** button in the sidebar to create your first session, select a model from the dropdown, and type a topic to start a debate.
+Click the **+** button in the sidebar to create your first session. The setup modal lets you choose:
+
+- **AI vs AI Debate**: the Pro and Con council debate each other.
+- **AI vs Human Debate Training**: you debate a Practice Debater and receive Judge, Judge Assistant, and Debate Trainer feedback.
+
+After the chat is created, select an Overall Model from the dropdown and type either a normal message or a debate topic.
 
 ## Windows PowerShell
 
@@ -255,7 +260,7 @@ To test the full UI without real API calls or provider keys:
 Mock mode is useful for:
 
 - Frontend development without spending API credits.
-- Testing the debate flow, settings panel, and analytics UI.
+- Testing the debate flow, settings panel, analytics UI, Debate Intelligence, multi-judge panel display, verdict review, and practice-mode flow.
 - Verifying the setup works before adding real API keys.
 
 ## Running Tests

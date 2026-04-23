@@ -26,6 +26,7 @@ import {
   resetUserDebateProfile,
   renameSession,
   submitDebateFeedback,
+  submitVerdictReview,
   updateCouncilSettings,
   updateSessionSettings,
   WS_BASE
@@ -674,6 +675,24 @@ export default function Home() {
     await refreshIntelligence(selectedId, debateId);
   }
 
+  async function handleVerdictReview(
+    action: "challenge" | "override",
+    winner: "pro" | "con" | "unclear",
+    note: string
+  ) {
+    if (!selectedId) {
+      return;
+    }
+    const debateId = selectedDebateBySession[selectedId];
+    if (!debateId) {
+      return;
+    }
+    await submitVerdictReview(selectedId, debateId, action, winner, note.trim());
+    await refreshDebates(selectedId);
+    await refreshAnalytics(selectedId, debateId);
+    await refreshIntelligence(selectedId, debateId);
+  }
+
   function handleDraftChange(value: string) {
     if (!selectedId) {
       return;
@@ -1115,6 +1134,7 @@ export default function Home() {
         onResetUniversalIdentities={handleResetUniversalIdentities}
         onResetUserDebateProfile={handleResetUserDebateProfile}
         onFeedbackSubmit={handleSubmitFeedback}
+        onVerdictReview={handleVerdictReview}
         onRename={handleRename}
         onRenameDebate={handleRenameDebate}
         onDeleteRequest={(session) => {

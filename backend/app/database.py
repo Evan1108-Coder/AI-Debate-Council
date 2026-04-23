@@ -115,6 +115,11 @@ DEFAULT_SESSION_SETTINGS = {
         "training_focus": "Full Debate",
         "opponent_difficulty": "Adaptive",
     },
+    "judging_settings": {
+        "judge_panel_size": 1,
+        "analytics_weight": 0.25,
+        "allow_user_verdict_challenge": True,
+    },
 }
 DEFAULT_USER_DEBATE_PROFILE = {
     "version": 1,
@@ -243,6 +248,7 @@ class Database:
                     judge_mode TEXT NOT NULL DEFAULT 'Hybrid',
                     evidence_strictness TEXT NOT NULL DEFAULT 'Normal',
                     practice_settings TEXT NOT NULL DEFAULT '{}',
+                    judging_settings TEXT NOT NULL DEFAULT '{}',
                     updated_at TEXT NOT NULL,
                     FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
                 );
@@ -455,6 +461,10 @@ class Database:
         if "practice_settings" not in columns:
             connection.execute(
                 "ALTER TABLE session_settings ADD COLUMN practice_settings TEXT NOT NULL DEFAULT '{}'"
+            )
+        if "judging_settings" not in columns:
+            connection.execute(
+                "ALTER TABLE session_settings ADD COLUMN judging_settings TEXT NOT NULL DEFAULT '{}'"
             )
 
     def _ensure_history_schema(self, connection: sqlite3.Connection) -> None:
@@ -826,9 +836,10 @@ class Database:
                 judge_mode,
                 evidence_strictness,
                 practice_settings,
+                judging_settings,
                 updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 session_id,
@@ -860,6 +871,7 @@ class Database:
                 council_defaults["default_judge_mode"],
                 DEFAULT_SESSION_SETTINGS["evidence_strictness"],
                 json.dumps(DEFAULT_SESSION_SETTINGS["practice_settings"]),
+                json.dumps(DEFAULT_SESSION_SETTINGS["judging_settings"]),
                 now,
             ),
         )
@@ -934,6 +946,7 @@ class Database:
                 judge_mode = ?,
                 evidence_strictness = ?,
                 practice_settings = ?,
+                judging_settings = ?,
                 updated_at = ?
             WHERE session_id = ?
             """,
@@ -966,6 +979,7 @@ class Database:
                 next_settings["judge_mode"],
                 next_settings["evidence_strictness"],
                 json.dumps(next_settings["practice_settings"]),
+                json.dumps(next_settings["judging_settings"]),
                 utc_now(),
                 session_id,
             ),
@@ -1004,6 +1018,7 @@ class Database:
                 "judge_mode": row["judge_mode"],
                 "evidence_strictness": row["evidence_strictness"],
                 "practice_settings": self._json_payload(row["practice_settings"], {}),
+                "judging_settings": self._json_payload(row["judging_settings"], {}),
                 "updated_at": row["updated_at"],
             }
         )
@@ -1055,7 +1070,32 @@ class Database:
             "practice_settings": self._normalize_practice_settings(
                 merged.get("practice_settings") or {}
             ),
+            "judging_settings": self._normalize_judging_settings(
+                merged.get("judging_settings") or {}
+            ),
             "updated_at": str(merged.get("updated_at", utc_now())),
+        }
+
+    def _normalize_judging_settings(self, payload: object) -> dict:
+        raw = payload if isinstance(payload, dict) else {}
+        merged = {**DEFAULT_SESSION_SETTINGS["judging_settings"], **raw}
+        try:
+            panel_size = int(merged.get("judge_panel_size", 1))
+        except (TypeError, ValueError):
+            panel_size = 1
+        if panel_size not in {1, 3, 5}:
+            panel_size = 1
+        return {
+            "judge_panel_size": panel_size,
+            "analytics_weight": self._bounded_float(
+                merged.get("analytics_weight", 0.25),
+                0.25,
+                0.0,
+                0.75,
+            ),
+            "allow_user_verdict_challenge": bool(
+                merged.get("allow_user_verdict_challenge", True)
+            ),
         }
 
     def _normalize_practice_settings(self, payload: object) -> dict:
@@ -1766,6 +1806,70 @@ class Database:
                 "question_key": question_key,
                 "answer": answer,
                 "created_at": now,
+            }
+
+    def add_verdict_review(
+        self,
+        *,
+        session_id: str,
+        debate_id: str,
+        action: str,
+        winner: str,
+        note: str,
+    ) -> dict | None:
+        action_value = action.strip().lower()
+        winner_value = winner.strip().lower()
+        if action_value not in {"challenge", "override"}:
+            return None
+        if winner_value not in {"pro", "con", "unclear"}:
+            winner_value = "unclear"
+
+        with self.lock, self.session() as connection:
+            row = connection.execute(
+                "SELECT * FROM debates WHERE id = ? AND session_id = ?",
+                (debate_id, session_id),
+            ).fetchone()
+            if not row:
+                return None
+            now = utc_now()
+            metadata = self._json_payload(row["metadata"], {})
+            reviews = metadata.get("verdict_reviews")
+            if not isinstance(reviews, list):
+                reviews = []
+            review = {
+                "id": str(uuid4()),
+                "action": action_value,
+                "winner": winner_value,
+                "note": note.strip()[:1200],
+                "created_at": now,
+            }
+            reviews.append(review)
+            metadata["verdict_reviews"] = reviews
+            if action_value == "override":
+                metadata["user_verdict_override"] = {
+                    "winner": winner_value,
+                    "note": review["note"],
+                    "created_at": now,
+                    "review_id": review["id"],
+                }
+            elif action_value == "challenge":
+                metadata["user_verdict_challenge"] = {
+                    "winner": winner_value,
+                    "note": review["note"],
+                    "created_at": now,
+                    "review_id": review["id"],
+                }
+            connection.execute(
+                "UPDATE debates SET metadata = ? WHERE id = ?",
+                (json.dumps(metadata), debate_id),
+            )
+            connection.execute(
+                "UPDATE sessions SET updated_at = ? WHERE id = ?", (now, session_id)
+            )
+            return {
+                **review,
+                "session_id": session_id,
+                "debate_id": debate_id,
             }
 
     def clear_visible_history(self, session_id: str) -> bool:

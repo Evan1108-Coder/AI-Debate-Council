@@ -191,6 +191,19 @@ export function submitDebateFeedback(
   });
 }
 
+export function submitVerdictReview(
+  sessionId: string,
+  debateId: string,
+  action: "challenge" | "override",
+  winner: "pro" | "con" | "unclear",
+  note: string
+) {
+  return request<{ id: string }>(`/api/sessions/${sessionId}/debates/${debateId}/verdict-review`, {
+    method: "POST",
+    body: JSON.stringify({ action, winner, note })
+  });
+}
+
 export async function recordRuntimeDiary(
   event: string,
   detail: string,

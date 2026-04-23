@@ -55,6 +55,11 @@ type DebateRoomProps = {
   onResetUniversalIdentities: (confirmation: string) => Promise<{ deleted: number }>;
   onResetUserDebateProfile: (confirmation: string) => Promise<unknown>;
   onFeedbackSubmit: (questionKey: string, answer: string) => Promise<void>;
+  onVerdictReview: (
+    action: "challenge" | "override",
+    winner: "pro" | "con" | "unclear",
+    note: string
+  ) => Promise<void>;
   onRename: (session: ChatSession, name: string) => Promise<boolean>;
   onRenameDebate: (debate: DebateRecord, name: string) => Promise<boolean>;
   onDeleteRequest: (session: ChatSession) => void;
@@ -78,6 +83,7 @@ const roleStyles: Record<string, string> = {
   con_evidence_researcher: "border-l-4 border-l-sky-700",
   con_cross_examiner: "border-l-4 border-l-amber-600",
   judge_assistant: "border-l-4 border-l-zinc-500",
+  judge_panelist: "border-l-4 border-l-violet-700",
   judge: "border-l-4 border-l-zinc-950",
   practice_user: "border-l-4 border-l-emerald-700",
   practice_debater: "border-l-4 border-l-red-700",
@@ -171,6 +177,7 @@ export function DebateRoom({
   onResetUniversalIdentities,
   onResetUserDebateProfile,
   onFeedbackSubmit,
+  onVerdictReview,
   onRename,
   onRenameDebate,
   onDeleteRequest,
@@ -369,7 +376,9 @@ export function DebateRoom({
           {activePanel === "intelligence" ? (
             <IntelligencePanel
               intelligence={intelligence}
+              settings={settings}
               onFeedbackSubmit={onFeedbackSubmit}
+              onVerdictReview={onVerdictReview}
             />
           ) : null}
 
@@ -1131,10 +1140,18 @@ function TeamPreparationNotice() {
 
 function IntelligencePanel({
   intelligence,
-  onFeedbackSubmit
+  settings,
+  onFeedbackSubmit,
+  onVerdictReview
 }: {
   intelligence: DebateIntelligence | null;
+  settings: SessionSettings | null;
   onFeedbackSubmit: (questionKey: string, answer: string) => Promise<void>;
+  onVerdictReview: (
+    action: "challenge" | "override",
+    winner: "pro" | "con" | "unclear",
+    note: string
+  ) => Promise<void>;
 }) {
   if (!intelligence?.debate) {
     return (
@@ -1181,6 +1198,13 @@ function IntelligencePanel({
             emptyText="The review appears after the Judge finishes and the debate is finalized."
           />
         </Panel>
+
+        <VerdictReviewPanel
+          records={intelligence.verdict_reviews}
+          settings={settings}
+          debate={debate}
+          onVerdictReview={onVerdictReview}
+        />
 
         <div className="grid gap-3 xl:grid-cols-2">
           <Panel title="Claim Ledger">
@@ -1234,6 +1258,117 @@ function IntelligencePanel({
         />
       </div>
     </section>
+  );
+}
+
+function VerdictReviewPanel({
+  records,
+  settings,
+  debate,
+  onVerdictReview
+}: {
+  records: DebateIntelligenceRecord[];
+  settings: SessionSettings | null;
+  debate: DebateRecord;
+  onVerdictReview: (
+    action: "challenge" | "override",
+    winner: "pro" | "con" | "unclear",
+    note: string
+  ) => Promise<void>;
+}) {
+  const [action, setAction] = useState<"challenge" | "override">("challenge");
+  const [winner, setWinner] = useState<"pro" | "con" | "unclear">("unclear");
+  const [note, setNote] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const allowed = settings?.judging_settings?.allow_user_verdict_challenge ?? true;
+  const completed = debate.status === "completed";
+
+  const submit = async () => {
+    if (!completed || !allowed || saving) {
+      return;
+    }
+    setSaving(true);
+    setSaved(false);
+    setError(null);
+    try {
+      await onVerdictReview(action, winner, note);
+      setNote("");
+      setSaved(true);
+    } catch (exc) {
+      setError(exc instanceof Error ? exc.message : "Could not save verdict review.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Panel title="Verdict review">
+      <p className="text-sm leading-6 text-zinc-600">
+        Challenge the Judge when something was missed, or override the displayed winner when you
+        want the chat statistics to use your final call. The original Judge message stays unchanged.
+      </p>
+      <RecordList
+        records={records}
+        emptyText="No verdict challenge or override has been saved for this debate yet."
+      />
+      {!allowed ? (
+        <p className="mt-3 rounded-md border border-zinc-200 bg-zinc-50 px-3 py-2 text-sm text-zinc-600">
+          Verdict review is disabled in this chat's Judgment Quality settings.
+        </p>
+      ) : null}
+      {completed && allowed ? (
+        <div className="mt-4 grid gap-3 md:grid-cols-[160px_160px_1fr_auto] md:items-end">
+          <SelectSetting
+            label="Action"
+            value={action}
+            options={["challenge", "override"]}
+            onChange={(value) => {
+              setAction(value as "challenge" | "override");
+              setSaved(false);
+            }}
+          />
+          <SelectSetting
+            label="Winner"
+            value={winner}
+            options={["pro", "con", "unclear"]}
+            onChange={(value) => {
+              setWinner(value as "pro" | "con" | "unclear");
+              setSaved(false);
+            }}
+          />
+          <label className="text-sm font-medium text-zinc-900">
+            Note
+            <input
+              value={note}
+              onChange={(event) => {
+                setNote(event.target.value);
+                setSaved(false);
+              }}
+              maxLength={1200}
+              placeholder="What did the Judge miss, or why should the winner change?"
+              className="mt-1 h-11 w-full rounded-md border border-zinc-300 px-3"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={submit}
+            disabled={saving}
+            className="h-11 rounded-md bg-zinc-950 px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-zinc-400"
+          >
+            {saving ? "Saving..." : "Save"}
+          </button>
+        </div>
+      ) : null}
+      {!completed ? (
+        <p className="mt-3 text-sm text-zinc-600">
+          Verdict review becomes available after the Judge finishes.
+        </p>
+      ) : null}
+      {saved ? <p className="mt-2 text-sm text-emerald-700">Verdict review saved.</p> : null}
+      {error ? <p className="mt-2 text-sm text-red-700">{error}</p> : null}
+    </Panel>
   );
 }
 
@@ -2312,6 +2447,56 @@ function SettingsPanel({
           </div>
           <p className="mt-3 text-xs text-zinc-600">
             Turning experience off only affects this chat. Universal experience scope is controlled from Council Settings.
+          </p>
+        </Panel>
+
+        <Panel title="Judgment Quality">
+          <p className="mb-3 text-sm text-zinc-600">
+            Use a judge panel when verdict quality matters more than speed. Analytics weighting
+            lets tracked claims, challenges, evidence, and stance signals slightly influence the final call.
+          </p>
+          <div className="grid gap-3 md:grid-cols-3">
+            <SelectSetting
+              label="Judge Panel Size"
+              value={String(settings.judging_settings.judge_panel_size)}
+              options={["1", "3", "5"]}
+              onChange={(value) =>
+                onSettingsChange({
+                  judging_settings: {
+                    ...settings.judging_settings,
+                    judge_panel_size: Number(value) as 1 | 3 | 5
+                  }
+                })
+              }
+            />
+            <SelectSetting
+              label="Analytics Weight"
+              value={String(settings.judging_settings.analytics_weight)}
+              options={["0", "0.15", "0.25", "0.4", "0.6", "0.75"]}
+              onChange={(value) =>
+                onSettingsChange({
+                  judging_settings: {
+                    ...settings.judging_settings,
+                    analytics_weight: Number(value)
+                  }
+                })
+              }
+            />
+            <ToggleSetting
+              label="Allow Verdict Challenge / Override"
+              value={settings.judging_settings.allow_user_verdict_challenge}
+              onChange={(value) =>
+                onSettingsChange({
+                  judging_settings: {
+                    ...settings.judging_settings,
+                    allow_user_verdict_challenge: value
+                  }
+                })
+              }
+            />
+          </div>
+          <p className="mt-3 text-xs text-zinc-600">
+            1 judge is fastest. 3 or 5 judges cost more because each panelist makes an independent model call.
           </p>
         </Panel>
 

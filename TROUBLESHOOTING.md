@@ -596,6 +596,29 @@ If a message ends with "_Response reached the max-token limit..._":
 
 The system automatically attempts one continuation when a response is truncated, but very long responses may still hit the combined limit.
 
+### Multi-Judge Panel Is Slow or Expensive
+
+Judge Panel Size can be set to 1, 3, or 5 in Chat Settings → Judgment Quality. A 3-judge panel makes three independent Judge calls before the final consensus message; a 5-judge panel makes five. This improves robustness, but it costs more and takes longer. Use 1 Judge for quick testing, and 3 or 5 Judges when verdict quality matters.
+
+### Final Verdict Mentions Analytics Weight
+
+This is expected. The Judge system combines the AI Judge or panel votes with the configured Analytics Weight. A low weight keeps the AI verdict dominant. A higher weight lets tracked signals such as Bayesian stance, challenge resolution, evidence quality, and scorecard records influence the final winner.
+
+### I Disagree With the Judge
+
+Open Debate Intelligence → Verdict Review. You can:
+
+- **Challenge** the verdict, which records your objection without changing charts.
+- **Override** the winner, which updates saved statistics such as Win Rate by Team.
+
+The original Judge message is never rewritten. The override is stored separately in debate metadata and Debate Intelligence.
+
+If the Verdict Review controls do not appear, check Chat Settings → Judgment Quality → Allow Verdict Challenge / Override.
+
+### Practice Mode Does Not Start
+
+AI vs Human Debate Training is chosen when the chat is created. Existing chats cannot change modes. Create a new chat, choose AI vs Human Debate Training in the setup modal, pick an Overall Model, and send a debate topic. The app will ask whether you want to be Pro, Con, or Auto.
+
 ### Clear History vs Clear Memory
 
 - **Clear Chat History**: Hides visible messages and debate statistics. The hidden messages are still available as memory for follow-up Council Assistant responses. Useful for cleaning up the UI while preserving context.
@@ -618,6 +641,10 @@ Common causes:
 - **Rate limit**: You are sending too many requests. Wait and retry, or use a different model.
 - **Model not found**: The model name in `MODEL_MAP` does not match what the provider expects. This should not happen with the built-in model list, but could occur if the registry was modified.
 - **Network error**: Your machine cannot reach the provider API. Check your internet connection.
+
+### GitHub Models Tokens
+
+GitHub Models routing is intentionally not supported. Use direct provider keys such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GROQ_API_KEY`, `MINIMAX_API_KEY`, or `MOONSHOT_API_KEY`. This avoids false "unlocked" states where GitHub lists a model but the inference endpoint rejects the exact model ID.
 
 ### Cost Estimates Look Old or Incomplete
 

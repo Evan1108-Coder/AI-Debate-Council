@@ -1,6 +1,6 @@
 # AI Debate Council
 
-AI Debate Council is a full-stack web application where two AI teams — Pro and Con — debate any topic you choose in real time. Each team fields up to four specialist debaters with distinct roles. After the debate, an optional Judge Assistant audits the transcript for missed points, and a Judge AI delivers a final verdict. The entire exchange streams token by token over WebSockets so you can watch it unfold live.
+AI Debate Council is a full-stack web application where two AI teams — Pro and Con — debate any topic you choose in real time, or where you can practice debating directly against an AI opponent. Each AI team fields up to four specialist debaters with distinct roles. After the debate, an optional Judge Assistant audits the transcript for missed points, and the Judge system can use either one Judge or a 3/5-person judge panel with analytics-weighted scoring. The entire exchange streams token by token over WebSockets so you can watch it unfold live.
 
 The backend is Python 3.13, FastAPI, SQLite, WebSockets, and LiteLLM. The frontend is Next.js, React, TypeScript, and Tailwind CSS.
 
@@ -30,8 +30,19 @@ The backend is Python 3.13, FastAPI, SQLite, WebSockets, and LiteLLM. The fronte
 - **Four team roles**: Advocate, Rebuttal Critic, Evidence Researcher, and Cross-Examiner. Each role has a distinct system prompt, job description, and default behavior.
 - **Professional phase flow**: Debates follow structured constructive, cross-examination, evidence, rebuttal, advocate-led discussion, closing, audit, and verdict phases instead of the old moderator loop.
 - **Optional Judge Assistant**: Before the final verdict, a neutral Judge Assistant audits the debate for missed points, unanswered claims, evidence gaps, contradictions, and useful statistics for the Judge.
-- **Judge AI verdict**: The Judge receives the full transcript, the Judge Assistant audit, and live analytics, then delivers a structured six-part verdict naming a winner.
+- **Judge AI verdict**: The Judge receives the full transcript, the Judge Assistant audit, and live analytics, then delivers a structured verdict naming a winner.
+- **Optional multi-judge panel**: Chat Settings can switch from 1 Judge to 3 or 5 independent Judge Panelists. Their votes are combined by majority-style scoring.
+- **Analytics-weighted verdicts**: The final verdict can give a configurable weight to tracked quantitative signals such as Bayesian stance, claims, challenges, evidence, and scorecard data.
+- **Verdict review**: In Debate Intelligence, the user can challenge the verdict or override the saved winner for future charts without rewriting the original Judge transcript.
 - **Maximum 3 active debates** running concurrently across all sessions.
+
+### AI vs Human Debate Training
+
+- **Practice mode**: New chats can be created as AI vs AI Debate or AI vs Human Debate Training. The mode is locked for that chat.
+- **Practice Debater**: In training mode, the AI opponent is called Practice Debater and argues against the human.
+- **Free or structured practice**: Free mode lets the debate continue until the user ends it. Structured mode uses a chosen number of rounds and turns the last round into a closing appeal.
+- **Debate Trainer**: After the Judge verdict, a Debate Trainer reviews the user's performance, style, strengths, weaknesses, and next improvement targets.
+- **User Debate Profile**: The app stores a lightweight debate profile from practice results so future training can adapt without inventing false experience.
 
 ### Chat and Council Assistant
 
@@ -58,7 +69,7 @@ The backend is Python 3.13, FastAPI, SQLite, WebSockets, and LiteLLM. The fronte
 ### Cost Tracking
 
 - **Estimated API cost per debate**: The backend tracks token usage for every model call and estimates costs using live OpenRouter pricing when a supported model can be matched there, with a local fallback table when live pricing is unavailable.
-- **9 currencies**: USD, CNY, HKD, EUR, JPY, GBP, AUD, CAD, SGP. Currency is selectable per chat in Chat Settings.
+- **9 currencies**: USD, CNY, HKD, EUR, JPY, GBP, AUD, CAD, SGD. Currency is selectable per chat in Chat Settings.
 - **Cost summaries**: Council Assistant messages show their own estimated cost. Debate turns store individual `cost_summary` for per-turn analytics, and the Judge message additionally stores a `debate_cost_summary` containing the overall debate total.
 - **CostBox display**: When "Show Money Cost" is enabled in Chat Settings, Council Assistant messages display their own estimated cost. In debate mode, the Judge message shows the overall debate cost by default (via `debate_cost_summary`). Turn-by-turn debate costs appear only when "Show Every Message Cost In Debate" is enabled. An optional per-model breakdown is available via "Show Model Costs".
 - **Token estimation**: A lightweight heuristic estimates tokens from text (with CJK-aware counting) without requiring a tokenizer library.
@@ -96,6 +107,7 @@ The backend is Python 3.13, FastAPI, SQLite, WebSockets, and LiteLLM. The fronte
 - Discussion Messages Per Team (1–4, default 3).
 - Debate rounds (1–6, default 2) controls the number of advocate-led discussion phases.
 - Judge Assistant toggle (on/off, recommended on).
+- Judgment Quality: Judge Panel Size (1/3/5), Analytics Weight (0–75%), and Allow Verdict Challenge / Override.
 - Per-agent settings: model, temperature (0–1), max tokens (120–2000), response length (Concise/Normal/Detailed), web search toggle for Evidence Researcher, Always On toggle for Council Assistant.
 - Debate tone (Academic, Casual, Formal, Aggressive).
 - Language (English, Chinese, Cantonese).
@@ -219,7 +231,8 @@ Each debate has two teams (Pro and Con) with 1 to 4 debaters per team. The numbe
 | **Evidence Researcher** | Add evidence, examples, missing context, and careful uncertainty notes for your team. |
 | **Cross-Examiner** | Ask pressure questions, expose contradictions, and force the other team to answer clearly. |
 | **Judge Assistant** (neutral, optional) | Audit the debate for missed points, unanswered claims, evidence gaps, statistics, and scoring risks. Does not choose the final winner. |
-| **Judge** (neutral) | Use the debate transcript, Judge Assistant audit, and analytics to make the final decision. |
+| **Judge Panelist** (neutral, optional) | In 3/5-judge mode, each panelist votes independently before the final weighted consensus is computed. |
+| **Judge** (neutral) | Use the debate transcript, Judge Assistant audit, panel votes, and analytics to make or summarize the final decision. |
 
 ### Debate Flow
 
@@ -229,7 +242,7 @@ Each debate has two teams (Pro and Con) with 1 to 4 debaters per team. The numbe
 4. **Discussion Time.** Advocates speak as team spokespersons. Discussion Time 1 opens with Pro Advocate; Discussion Time 2 opens with Con Advocate. One-debater mode uses one Open Discussion block with Pro-open and Con-open mini-rounds.
 5. **Rebuttal and closing phases.** Critics attack the strongest opposing points, then Advocates close.
 6. **Judge Assistant audits** (if enabled) the full transcript and analytics.
-7. **Judge delivers verdict** with six parts: best affirmative argument, best skeptical argument, best evidence or research need, analytics agreement/disagreement, clear winner, and why.
+7. **Judge delivers verdict**. In single-judge mode, the Judge verdict is combined with the configured analytics weight. In panel mode, 3 or 5 Judge Panelists vote independently and the final Judge message summarizes the panel votes, analytics signal, weighted scores, clear winner, and why.
 
 ### Discussion Rules
 
@@ -252,7 +265,7 @@ Provider errors (overloaded, rate limit, timeout, connection errors) are retried
 
 ## Debate Intelligence and Analytics
 
-The backend includes a lightweight analytics engine in `backend/app/analytics.py`. It requires no extra ML dependencies — all scoring is done with Python standard library math. Each debate transcript is analyzed and the results are streamed to the frontend and included in the Judge prompt.
+The backend includes a lightweight analytics engine in `backend/app/analytics.py`. It requires no extra ML dependencies — all scoring is done with Python standard library math. Each debate transcript is analyzed and the results are streamed to the frontend, included in the Judge prompt, and optionally weighted into the final verdict.
 
 | Method | Description |
 | --- | --- |
@@ -287,11 +300,22 @@ The Graphs & Statistics panel shows:
 - **Argument mining details**: Evidence cue count, rebuttal cue count, redundant turn count, strongest mined claims.
 - **Attention terms**: Top 8 salient terms from the transcript.
 
+### Debate Intelligence Tab
+
+The Debate Intelligence tab stores structured records created from the actual transcript:
+
+- **Claim Ledger**: tracked claims that can later be supported, challenged, answered, dropped, conceded, or used by the Judge.
+- **Challenge And Resolution Tracker**: critic/examiner attacks and whether they were answered, ignored, or left unresolved.
+- **Evidence Ledger**: evidence records, uncertainty notes, and URL citations when researchers provide source links.
+- **Judge Scorecard**: claim count, challenge count, evidence count, unanswered challenges, judge mode, and detected winner.
+- **Verdict Review**: user challenges and winner overrides. Overrides affect charts such as Win Rate by Team but do not rewrite the original Judge message.
+- **Team Rooms**: view-only Pro and Con private notebooks generated during team preparation.
+
 ## Chat Settings
 
 Each session stores its own settings. Changes take effect on the next turn — even mid-debate for settings like debaters per team. Settings are accessible from the Chat Settings panel in the UI.
 
-The settings panel is organized into sections: Overall Model, Debating Flow (debaters per team, discussion messages per team, debate rounds, with a live flow preview), Debaters & Teams (Judge Assistant toggle, per-agent overrides), Cost & Display, and Advanced.
+The settings panel is organized into sections: Overall Model, Debating Flow (debaters per team, discussion messages per team, debate rounds, with a live flow preview), Debaters & Teams or Practice Agents, Council Assistant, Debate Intelligence, Judgment Quality, Prompt & Tone, Output & Display, and Advanced.
 
 ### Session-Level Settings
 
@@ -302,6 +326,9 @@ The settings panel is organized into sections: Overall Model, Debating Flow (deb
 | Discussion Messages Per Team | 3 | 1–4 | Advocate messages allowed for each team in each discussion phase. |
 | Debate rounds | 2 | 1–6 | Number of advocate-led discussion phases in the professional flow. |
 | Judge Assistant | On | On/Off | Whether the Judge Assistant audits before the verdict. |
+| Judge Panel Size | 1 | 1, 3, 5 | Number of independent Judge Panelists. 3 and 5 are more robust but cost more model calls. |
+| Analytics Weight | 0.25 | 0–0.75 | How much structured analytics can influence the final verdict compared with the AI Judge or panel votes. |
+| Allow Verdict Challenge / Override | On | On/Off | Allows the user to challenge the verdict or override the saved winner in Debate Intelligence. |
 | Temperature | 0.55 | 0.00–1.00 | Default temperature for all roles. |
 | Max tokens | 700 | 120–2000 | Default max tokens for all roles. |
 | Debate tone | Academic | Academic, Casual, Formal, Aggressive | Injected into all system prompts. |
@@ -312,7 +339,7 @@ The settings panel is organized into sections: Overall Model, Debating Flow (deb
 | Show timestamps | Off | On/Off | Show message timestamps. |
 | Show token count | Off | On/Off | Show estimated token counts. |
 | Show money cost | On | On/Off | Display estimated API cost. Council Assistant messages show their own cost; debate messages show the final total by default. |
-| Cost currency | USD | USD, CNY, HKD, EUR, JPY, GBP, AUD, CAD, SGP | Currency for cost display. |
+| Cost currency | USD | USD, CNY, HKD, EUR, JPY, GBP, AUD, CAD, SGD | Currency for cost display. |
 | Show model costs | Off | On/Off | Show per-model cost breakdown in addition to the total. |
 | Show Every Message Cost In Debate | Off | On/Off | Show individual debater, Judge Assistant, and Judge message costs during debates, plus the final overall debate cost. |
 | Fact-check mode | Off | On/Off | Flag uncertain claims (reserved for tool integration). |
@@ -321,7 +348,7 @@ The settings panel is organized into sections: Overall Model, Debating Flow (deb
 
 ### Per-Agent Settings
 
-Each of the 7 agent roles (Advocate, Rebuttal Critic, Evidence Researcher, Cross-Examiner, Judge Assistant, Judge, Council Assistant) can override:
+Each agent role can override model and generation settings. This includes Advocate, Rebuttal Critic, Evidence Researcher, Cross-Examiner, Judge Assistant, Judge, Council Assistant, Practice Debater, and Debate Trainer.
 
 | Setting | Default | Description |
 | --- | --- | --- |
@@ -366,6 +393,7 @@ Team role settings (Advocate, Rebuttal Critic, etc.) apply to both the Pro and C
 | `GET` | `/api/models` | List unlocked models, provider summaries, mock mode status. |
 | `GET` | `/api/sessions` | List all sessions, sorted by last updated. |
 | `POST` | `/api/sessions` | Create a new session. Returns 409 if at the 10-session limit. |
+| `DELETE` | `/api/sessions` | Delete all chat sessions while keeping universal experience/profile data. |
 | `PATCH` | `/api/sessions/{session_id}` | Rename a session. Body: `{"name": "New Name"}`. |
 | `DELETE` | `/api/sessions/{session_id}` | Delete a session and all its data. |
 | `POST` | `/api/sessions/{session_id}/clear-history` | Hide visible messages and debates (preserves memory). |
@@ -377,6 +405,13 @@ Team role settings (Advocate, Rebuttal Critic, etc.) apply to both the Pro and C
 | `GET` | `/api/sessions/{session_id}/settings` | Get session settings. |
 | `PATCH` | `/api/sessions/{session_id}/settings` | Update session settings. Body: partial settings object. |
 | `GET` | `/api/sessions/{session_id}/analytics?debate_id=...` | Get analytics for a session's latest or specified debate. |
+| `GET` | `/api/sessions/{session_id}/intelligence?debate_id=...` | Get Claim Ledger, Challenge Tracker, Evidence Ledger, Judge Scorecard, team rooms, and verdict review records. |
+| `POST` | `/api/sessions/{session_id}/debates/{debate_id}/feedback` | Save optional post-debate user feedback for future experience records. |
+| `POST` | `/api/sessions/{session_id}/debates/{debate_id}/verdict-review` | Save a verdict challenge or winner override. |
+| `GET` | `/api/council-settings` | Get universal Council Settings. |
+| `PATCH` | `/api/council-settings` | Update universal Council Settings. |
+| `GET` | `/api/user-debate-profile` | Get the AI vs Human Debate Training profile. |
+| `POST` | `/api/user-debate-profile/reset` | Reset the user debate profile with confirmation. |
 | `POST` | `/api/runtime-diary` | Record a runtime diary entry. Body: `{"source": "...", "event": "...", "detail": "...", "session_id": "..."}`. |
 
 ### WebSocket
@@ -385,7 +420,9 @@ Team role settings (Advocate, Rebuttal Critic, etc.) apply to both the Pro and C
 | --- | --- |
 | `ws://localhost:8000/ws/debates/{session_id}` | Bidirectional WebSocket for debates and chat. |
 
-Send `{"type": "start_interaction", "topic": "...", "model": "model-name"}` to begin. The backend classifies intent and runs either a debate or a chat, streaming events back.
+Send `{"type": "start_interaction", "topic": "...", "model": "model-name"}` to begin. The backend classifies intent and runs either a debate, a chat, or an AI vs Human practice turn, streaming events back.
+
+In practice mode, send `{"type": "end_practice_debate", "model": "model-name"}` to end the practice debate and trigger Judge Assistant, Judge, and Debate Trainer.
 
 ## WebSocket Protocol
 
@@ -405,6 +442,8 @@ Send `{"type": "start_interaction", "topic": "...", "model": "model-name"}` to b
 | --- | --- |
 | `debate_started` | Debate created. Includes debate record, assignments, judge info. |
 | `interaction_started` | Chat mode started. Includes mode and selected model. |
+| `practice_state_updated` | Practice debate state changed, including side, flow, and rounds left. |
+| `team_preparation_started` / `team_preparation_completed` | Pro and Con private notebooks are being prepared or have finished. |
 | `message_started` | A new message is about to stream. Includes speaker, role, model, round. |
 | `message_delta` | A token chunk for the current stream. |
 | `message_replaced` | Replace the entire content of a streaming message (used on errors). |

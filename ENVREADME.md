@@ -35,6 +35,10 @@ Think of provider API keys as keys that unlock doors:
 
 The frontend calls `GET /api/models` and uses the returned `models` array for all dropdowns. That array contains only unlocked models. Each chat stores an Overall Model, and Chat Settings can optionally override the model for individual agent roles.
 
+GitHub Models tokens are not supported by this app. Use the direct provider keys listed below. This avoids showing models that GitHub's gateway may list but reject at inference time.
+
+Judging options such as Judge Panel Size, Analytics Weight, and Allow Verdict Challenge / Override are stored in SQLite as chat settings. They are not environment variables.
+
 ## Backend Variables
 
 | Variable | Required | Default | Description |
@@ -191,6 +195,7 @@ ALLOW_LOCALHOST_PORTS=false
 DEBATE_ROUNDS=2
 LITELLM_TIMEOUT_SECONDS=120
 MOCK_LLM_RESPONSES=false
+OPENROUTER_API_KEY=
 
 # Provider API keys (add at least one for real debates)
 OPENAI_API_KEY=

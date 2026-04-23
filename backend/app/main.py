@@ -26,6 +26,7 @@ from .schemas import (
     ResetAgentExperienceRequest,
     ResetUserDebateProfileRequest,
     SessionSettingsUpdate,
+    VerdictReviewRequest,
 )
 
 
@@ -443,6 +444,7 @@ def session_intelligence(
         "challenges": by_type.get("challenge", []),
         "evidence": by_type.get("evidence", []),
         "scorecards": by_type.get("judge_scorecard", []),
+        "verdict_reviews": by_type.get("verdict_review", []),
         "values": by_type.get("value_record", []),
         "memories": by_type.get("memory_saved", []),
         "reviews": by_type.get("post_debate_review", []),
@@ -486,6 +488,55 @@ def add_debate_feedback(session_id: str, debate_id: str, payload: FeedbackReques
         lesson=f"User feedback for {payload.question_key}: {payload.answer}",
         confidence="medium",
         basis=[{"debate_id": debate_id, "feedback_id": saved["id"]}],
+    )
+    return saved
+
+
+@app.post("/api/sessions/{session_id}/debates/{debate_id}/verdict-review")
+def add_verdict_review(session_id: str, debate_id: str, payload: VerdictReviewRequest) -> dict:
+    debate = db.get_debate(session_id, debate_id)
+    if not debate:
+        raise HTTPException(status_code=404, detail="Debate not found.")
+    session_settings = db.get_session_settings(session_id)
+    judging_settings = (
+        session_settings.get("judging_settings", {}) if isinstance(session_settings, dict) else {}
+    )
+    if not judging_settings.get("allow_user_verdict_challenge", True):
+        raise HTTPException(
+            status_code=403,
+            detail="Verdict challenges and overrides are disabled for this chat.",
+        )
+    saved = db.add_verdict_review(
+        session_id=session_id,
+        debate_id=debate_id,
+        action=payload.action,
+        winner=payload.winner,
+        note=payload.note,
+    )
+    if not saved:
+        raise HTTPException(status_code=400, detail="Could not save verdict review.")
+    action_label = "User verdict override" if payload.action == "override" else "User verdict challenge"
+    db.add_intelligence_record(
+        session_id=session_id,
+        debate_id=debate_id,
+        record_type="verdict_review",
+        team="neutral",
+        role="user",
+        agent_id="user",
+        title=action_label,
+        content=(
+            f"{action_label}: {payload.winner.upper()}. "
+            f"{payload.note.strip() or 'No note provided.'}"
+        ),
+        status="Saved",
+        confidence=1.0,
+        payload={
+            "action": payload.action,
+            "winner": payload.winner,
+            "note": payload.note.strip(),
+            "review_id": saved["id"],
+        },
+        basis=[{"type": "user_verdict_review", "review_id": saved["id"]}],
     )
     return saved
 
