@@ -4,9 +4,15 @@ from pydantic import BaseModel, Field
 class ChatSession(BaseModel):
     id: str
     name: str
+    mode: str = "ai_vs_ai"
     default_index: int
     created_at: str
     updated_at: str
+
+
+class CreateSessionRequest(BaseModel):
+    mode: str = Field(default="ai_vs_ai", max_length=32)
+    settings: dict | None = None
 
 
 class RenameSessionRequest(BaseModel):
@@ -25,12 +31,18 @@ class DebateStartRequest(BaseModel):
 class CouncilSettingsUpdate(BaseModel):
     universal_experience: bool | None = None
     use_agent_identity_profiles: bool | None = None
+    use_user_debate_profile: bool | None = None
     debate_intelligence_depth: str | None = None
     use_value_consequence_system: bool | None = None
     default_judge_mode: str | None = None
+    confirmation_preferences: dict[str, bool] | None = None
 
 
 class ResetAgentExperienceRequest(BaseModel):
+    confirmation: str = Field(min_length=1, max_length=120)
+
+
+class ResetUserDebateProfileRequest(BaseModel):
     confirmation: str = Field(min_length=1, max_length=120)
 
 
@@ -67,6 +79,7 @@ class SessionSettingsUpdate(BaseModel):
     use_experience: bool | None = None
     judge_mode: str | None = None
     evidence_strictness: str | None = None
+    practice_settings: dict | None = None
 
 
 class DebateIntelligenceRecord(BaseModel):
@@ -111,6 +124,7 @@ class DebateRecord(BaseModel):
     status: str
     judge_summary: str | None = None
     error: str | None = None
+    metadata: dict | None = None
     started_at: str
     finished_at: str | None = None
 

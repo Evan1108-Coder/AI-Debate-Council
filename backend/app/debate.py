@@ -156,8 +156,18 @@ class DebateManager:
     def active_count(self) -> int:
         return len(self._active_debates)
 
+    def practice_state(self, session_id: str) -> dict[str, Any]:
+        session_settings = self._settings_snapshot(session_id)
+        debate = self.db.get_active_practice_debate(session_id)
+        return self._practice_state_payload(debate, session_settings)
+
     async def run_interaction(
-        self, websocket: WebSocket, session_id: str, content: str, selected_model_name: str
+        self,
+        websocket: WebSocket,
+        session_id: str,
+        content: str,
+        selected_model_name: str,
+        practice_side: str | None = None,
     ) -> None:
         if len(content) > USER_MESSAGE_MAX_CHARS:
             raise DebateError(
@@ -175,6 +185,7 @@ class DebateManager:
         try:
             cost_tracker = CostTracker()
             session_settings = self._settings_snapshot(session_id)
+            session_record = self.db.get_session(session_id) or {}
             effective_model_name = selected_model_name.strip() or str(
                 session_settings.get("overall_model", "")
             ).strip()
@@ -197,6 +208,16 @@ class DebateManager:
                 )
                 await self.run_safety_response(
                     websocket, session_id, cleaned_content, selected_model, safety, cost_tracker
+                )
+                return
+            if session_record.get("mode") == "ai_vs_human":
+                await self.run_practice_interaction(
+                    websocket=websocket,
+                    session_id=session_id,
+                    content=cleaned_content,
+                    selected_model=selected_model,
+                    cost_tracker=cost_tracker,
+                    requested_side=practice_side,
                 )
                 return
             if self._council_assistant_always_on(session_settings):
@@ -634,6 +655,348 @@ class DebateManager:
         await self._send_json(
             websocket,
             {"type": "interaction_completed", "mode": "chat", "debate_id": debate_id, "cost_summary": cost_summary}
+        )
+
+    async def run_practice_interaction(
+        self,
+        *,
+        websocket: WebSocket,
+        session_id: str,
+        content: str,
+        selected_model: SupportedModel,
+        cost_tracker: CostTracker | None = None,
+        requested_side: str | None = None,
+    ) -> None:
+        cost_tracker = cost_tracker or CostTracker()
+        session_settings = self._settings_snapshot(session_id)
+        practice_settings = self._practice_settings(session_settings)
+        active_debate = self.db.get_active_practice_debate(session_id)
+        profile = self.db.get_user_debate_profile()
+        side_choice = self._practice_side_choice(
+            requested_side or practice_settings.get("human_side", "Auto"),
+            profile,
+        )
+        human_side = side_choice["human_side"]
+        ai_side = "con" if human_side == "pro" else "pro"
+        if active_debate:
+            debate = active_debate
+            metadata = debate.get("metadata") if isinstance(debate.get("metadata"), dict) else {}
+            human_side = str(metadata.get("human_side") or human_side)
+            ai_side = str(metadata.get("ai_side") or ("con" if human_side == "pro" else "pro"))
+            topic = str(debate.get("topic") or content)
+        else:
+            topic = content
+            debate = self.db.create_debate(
+                session_id,
+                topic,
+                mode="practice",
+                metadata={
+                    "human_side": human_side,
+                    "ai_side": ai_side,
+                    "side_source": side_choice["source"],
+                    "side_reason": side_choice["reason"],
+                    "practice_flow": practice_settings["practice_flow"],
+                    "structured_rounds": practice_settings["structured_rounds"],
+                    "human_turns": 0,
+                },
+            )
+            await self._send_json(
+                websocket,
+                {
+                    "type": "practice_started",
+                    "debate": debate,
+                    "state": self._practice_state_payload(debate, session_settings),
+                    "selected_model": selected_model.public_dict(configured=True),
+                },
+            )
+        debate_id = debate["id"]
+        metadata = debate.get("metadata") if isinstance(debate.get("metadata"), dict) else {}
+        human_turns = int(metadata.get("human_turns") or 0) + 1
+        practice_flow = str(metadata.get("practice_flow") or practice_settings["practice_flow"])
+        structured_rounds = int(metadata.get("structured_rounds") or practice_settings["structured_rounds"])
+        is_structured = practice_flow == "Structured"
+        is_last_round = is_structured and human_turns >= structured_rounds
+        user_phase = self._practice_phase(
+            title="Your Closing Appeal" if is_last_round else f"Your Practice Turn {human_turns}",
+            index=human_turns * 2 - 1,
+            total=structured_rounds * 2 if is_structured else 0,
+            kind="practice_human",
+        )
+        user_message = self.db.add_message(
+            session_id=session_id,
+            debate_id=debate_id,
+            role="practice_user",
+            speaker="You",
+            model="user",
+            content=content,
+            phase=user_phase,
+        )
+        updated_debate = self.db.update_debate_metadata(
+            debate_id,
+            {
+                "human_turns": human_turns,
+                "practice_flow": practice_flow,
+                "structured_rounds": structured_rounds,
+                "human_side": human_side,
+                "ai_side": ai_side,
+            },
+        ) or debate
+        await self._send_json(
+            websocket,
+            {
+                "type": "practice_state_updated",
+                "state": self._practice_state_payload(updated_debate, session_settings),
+            },
+        )
+        await self._send_json(
+            websocket,
+            {"type": "message_completed", "stream_id": user_message["id"], "message": user_message},
+        )
+        await self._send_json(
+            websocket,
+            {
+                "type": "interaction_started",
+                "mode": "practice",
+                "debate": updated_debate,
+                "selected_model": selected_model.public_dict(configured=True),
+            },
+        )
+        practice_model = self._resolve_agent_model(session_settings, "practice_debater", selected_model)
+        generation_settings = self._agent_generation_settings(session_settings, "practice_debater")
+        transcript = self._practice_transcript(session_id, debate_id, human_side, ai_side)
+        phase = self._practice_phase(
+            title="Practice Debater Closing Appeal" if is_last_round else f"Practice Debater Turn {human_turns}",
+            index=human_turns * 2,
+            total=structured_rounds * 2 if is_structured else 0,
+            kind="practice_ai",
+        )
+        content_response = await self._stream_practice_debater_turn(
+            websocket=websocket,
+            session_id=session_id,
+            debate_id=debate_id,
+            topic=topic,
+            human_side=human_side,
+            ai_side=ai_side,
+            model=practice_model,
+            phase=phase,
+            transcript=transcript,
+            session_settings=session_settings,
+            generation_settings=generation_settings,
+            cost_tracker=cost_tracker,
+            is_last_round=is_last_round,
+        )
+        transcript.append(
+            {
+                "speaker": "Practice Debater",
+                "role": "practice_debater",
+                "team": ai_side,
+                "archetype": "practice_debater",
+                "round": human_turns,
+                "model": practice_model.name,
+                "intent": "practice against the user",
+                "target": "the user's latest argument",
+                "phase_key": phase["key"],
+                "phase_title": phase["title"],
+                "phase_index": phase["index"],
+                "phase_total": phase["total"],
+                "phase_kind": phase["kind"],
+                "content": content_response,
+            }
+        )
+        latest_analysis = self.phase_metadata_from_messages(
+            analyze_debate(topic, transcript),
+            self.db.list_messages(session_id),
+            topic,
+        )
+        latest_analysis["session_charts"] = session_chart_data(
+            self.db.list_debates(session_id),
+            self.db.list_messages(session_id),
+            debate_id,
+        )
+        await self._send_json(
+            websocket,
+            {"type": "analysis_updated", "round": latest_analysis["round"], "analysis": latest_analysis},
+        )
+        if is_last_round:
+            await self._finalize_practice_debate(
+                websocket=websocket,
+                session_id=session_id,
+                debate_id=debate_id,
+                topic=topic,
+                selected_model=selected_model,
+                cost_tracker=cost_tracker,
+            )
+            return
+        cost_summary = cost_tracker.summary(session_settings.get("cost_currency", "USD"))
+        await self._send_json(
+            websocket,
+            {
+                "type": "interaction_completed",
+                "mode": "practice",
+                "debate_id": debate_id,
+                "cost_summary": cost_summary,
+            },
+        )
+
+    async def end_practice_debate(
+        self,
+        websocket: WebSocket,
+        session_id: str,
+        selected_model_name: str,
+    ) -> None:
+        session_settings = self._settings_snapshot(session_id)
+        effective_model_name = selected_model_name.strip() or str(
+            session_settings.get("overall_model", "")
+        ).strip()
+        selected_model = self._resolve_selected_model(effective_model_name)
+        cost_tracker = CostTracker()
+        debate = self.db.get_active_practice_debate(session_id)
+        if not debate:
+            raise DebateError("No active practice debate is running in this chat.")
+        await self._finalize_practice_debate(
+            websocket=websocket,
+            session_id=session_id,
+            debate_id=debate["id"],
+            topic=str(debate.get("topic") or ""),
+            selected_model=selected_model,
+            cost_tracker=cost_tracker,
+        )
+
+    async def _finalize_practice_debate(
+        self,
+        *,
+        websocket: WebSocket,
+        session_id: str,
+        debate_id: str,
+        topic: str,
+        selected_model: SupportedModel,
+        cost_tracker: CostTracker,
+    ) -> None:
+        session_settings = self._settings_snapshot(session_id)
+        debate = self.db.get_active_practice_debate(session_id) or self.db.get_debate(
+            session_id, debate_id, include_hidden=True
+        )
+        if not debate:
+            raise DebateError("Practice debate not found.")
+        metadata = debate.get("metadata") if isinstance(debate.get("metadata"), dict) else {}
+        human_side = str(metadata.get("human_side") or "pro")
+        ai_side = str(metadata.get("ai_side") or ("con" if human_side == "pro" else "pro"))
+        transcript = self._practice_transcript(session_id, debate_id, human_side, ai_side)
+        if not any(turn.get("role") == "practice_user" for turn in transcript):
+            raise DebateError("Add at least one practice response before ending the debate.")
+        analysis = self.phase_metadata_from_messages(
+            analyze_debate(topic, transcript),
+            self.db.list_messages(session_id),
+            topic,
+        )
+        await self._send_json(
+            websocket,
+            {
+                "type": "practice_state_updated",
+                "state": {
+                    **self._practice_state_payload(debate, session_settings),
+                    "ending": True,
+                },
+            },
+        )
+        judge_assistant_report = ""
+        if self._judge_assistant_enabled(session_settings):
+            assistant_model = self._resolve_agent_model(
+                session_settings, "judge_assistant", selected_model
+            )
+            judge_assistant_report = await self._stream_judge_assistant_turn(
+                websocket=websocket,
+                session_id=session_id,
+                debate_id=debate_id,
+                topic=topic,
+                model=assistant_model,
+                transcript=transcript,
+                analysis=analysis,
+                session_settings=session_settings,
+                generation_settings=self._agent_generation_settings(
+                    session_settings, "judge_assistant"
+                ),
+                cost_tracker=cost_tracker,
+                intelligence_context=self._practice_profile_context(session_settings),
+            )
+            transcript = self._practice_transcript(session_id, debate_id, human_side, ai_side)
+        judge_model = self._resolve_agent_model(session_settings, "judge", selected_model)
+        judge_summary = await self._stream_judge_turn(
+            websocket=websocket,
+            session_id=session_id,
+            debate_id=debate_id,
+            topic=topic,
+            model=judge_model,
+            transcript=transcript,
+            analysis=analysis,
+            session_settings=session_settings,
+            generation_settings=self._agent_generation_settings(session_settings, "judge"),
+            judge_assistant_report=judge_assistant_report,
+            cost_tracker=cost_tracker,
+            intelligence_context=self._practice_profile_context(session_settings),
+        )
+        transcript = self._practice_transcript(session_id, debate_id, human_side, ai_side)
+        trainer_model = self._resolve_agent_model(session_settings, "debate_trainer", selected_model)
+        trainer_report = await self._stream_debate_trainer_turn(
+            websocket=websocket,
+            session_id=session_id,
+            debate_id=debate_id,
+            topic=topic,
+            human_side=human_side,
+            ai_side=ai_side,
+            model=trainer_model,
+            transcript=transcript,
+            analysis=analysis,
+            judge_summary=judge_summary,
+            session_settings=session_settings,
+            generation_settings=self._agent_generation_settings(session_settings, "debate_trainer"),
+            cost_tracker=cost_tracker,
+        )
+        final_analysis = self.phase_metadata_from_messages(
+            analyze_debate(topic, self._practice_transcript(session_id, debate_id, human_side, ai_side)),
+            self.db.list_messages(session_id),
+            topic,
+        )
+        final_analysis["session_charts"] = session_chart_data(
+            self.db.list_debates(session_id),
+            self.db.list_messages(session_id),
+            debate_id,
+        )
+        self._finalize_debate_intelligence(
+            session_id=session_id,
+            debate_id=debate_id,
+            topic=topic,
+            transcript=transcript,
+            analysis=final_analysis,
+            judge_summary=judge_summary,
+            session_settings=session_settings,
+        )
+        profile = self._update_user_profile_from_practice(
+            debate_id=debate_id,
+            human_side=human_side,
+            judge_summary=judge_summary,
+            trainer_report=trainer_report,
+        )
+        cost_summary = cost_tracker.summary(session_settings.get("cost_currency", "USD"))
+        self.db.complete_debate(debate_id, judge_summary)
+        await self._send_json(
+            websocket,
+            {
+                "type": "practice_completed",
+                "debate_id": debate_id,
+                "profile": profile,
+                "cost_summary": cost_summary,
+            },
+        )
+        await self._send_json(
+            websocket,
+            {
+                "type": "debate_completed",
+                "debate_id": debate_id,
+                "judge_summary": judge_summary,
+                "active_debates": self.active_count,
+                "cost_summary": cost_summary,
+            },
         )
 
     async def run_safety_response(
@@ -1283,6 +1646,320 @@ class DebateManager:
             "response_length": str(agent_settings.get("response_length", session_settings.get("response_length", "Normal"))),
             "agent_web_search": bool(agent_settings.get("web_search", False)),
         }
+
+    def _practice_settings(self, session_settings: dict[str, Any]) -> dict[str, Any]:
+        raw = session_settings.get("practice_settings")
+        defaults = {
+            "human_side": "Auto",
+            "practice_flow": "Free",
+            "structured_rounds": 3,
+            "use_user_profile": True,
+            "trainer_style": "Coach",
+            "training_focus": "Full Debate",
+            "opponent_difficulty": "Adaptive",
+        }
+        if not isinstance(raw, dict):
+            raw = {}
+        return {**defaults, **raw}
+
+    def _practice_side_choice(self, requested: str | None, profile: dict[str, Any]) -> dict[str, str]:
+        cleaned = str(requested or "Auto").strip().lower()
+        if cleaned in {"pro", "con"}:
+            return {
+                "human_side": cleaned,
+                "source": "user",
+                "reason": f"You chose {cleaned.upper()} for this practice debate.",
+            }
+        side_history = profile.get("side_history") if isinstance(profile, dict) else {}
+        pro_count = int((side_history or {}).get("pro", 0) or 0)
+        con_count = int((side_history or {}).get("con", 0) or 0)
+        if pro_count < con_count:
+            side = "pro"
+            reason = "Auto chose Pro because you have practiced that side less."
+        elif con_count < pro_count:
+            side = "con"
+            reason = "Auto chose Con because you have practiced that side less."
+        else:
+            side = "pro"
+            reason = "Auto chose Pro because your profile does not show a weaker or less-practiced side yet."
+        return {"human_side": side, "source": "auto", "reason": reason}
+
+    def _practice_state_payload(
+        self, debate: dict[str, Any] | None, session_settings: dict[str, Any]
+    ) -> dict[str, Any]:
+        if not debate:
+            return {"active": False}
+        metadata = debate.get("metadata") if isinstance(debate.get("metadata"), dict) else {}
+        practice_settings = self._practice_settings(session_settings)
+        flow = str(metadata.get("practice_flow") or practice_settings["practice_flow"])
+        structured_rounds = int(metadata.get("structured_rounds") or practice_settings["structured_rounds"])
+        human_turns = int(metadata.get("human_turns") or 0)
+        rounds_left = max(0, structured_rounds - human_turns) if flow == "Structured" else None
+        return {
+            "active": debate.get("status") == "running",
+            "debate_id": debate.get("id"),
+            "topic": debate.get("topic") or "",
+            "human_side": metadata.get("human_side") or practice_settings.get("human_side", "Auto"),
+            "ai_side": metadata.get("ai_side") or "",
+            "side_source": metadata.get("side_source") or "",
+            "side_reason": metadata.get("side_reason") or "",
+            "practice_flow": flow,
+            "structured_rounds": structured_rounds,
+            "human_turns": human_turns,
+            "rounds_left": rounds_left,
+        }
+
+    def _practice_phase(self, *, title: str, index: int, total: int, kind: str) -> dict[str, Any]:
+        key = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_") or kind
+        return {
+            "key": f"practice_{key}_{max(1, index)}",
+            "title": title,
+            "index": max(1, index),
+            "total": max(0, total),
+            "kind": kind,
+        }
+
+    def _practice_transcript(
+        self,
+        session_id: str,
+        debate_id: str,
+        human_side: str,
+        ai_side: str,
+    ) -> list[dict[str, Any]]:
+        transcript = []
+        for message in self.db.list_messages(session_id, include_hidden=True):
+            if message.get("debate_id") != debate_id:
+                continue
+            role = str(message.get("role") or "")
+            if role == "practice_user":
+                team = human_side
+                archetype = "human_debater"
+            elif role == "practice_debater":
+                team = ai_side
+                archetype = "practice_debater"
+            elif role in {"judge", "judge_assistant", "debate_trainer"}:
+                team = "neutral"
+                archetype = role
+            else:
+                team = "neutral"
+                archetype = role
+            transcript.append(
+                {
+                    "speaker": message.get("speaker") or role,
+                    "role": role,
+                    "team": team,
+                    "archetype": archetype,
+                    "round": message.get("phase_index") or message.get("sequence") or 0,
+                    "model": message.get("model") or "",
+                    "intent": "practice debate turn",
+                    "target": "the practice debate",
+                    "phase_key": message.get("phase_key"),
+                    "phase_title": message.get("phase_title"),
+                    "phase_index": message.get("phase_index"),
+                    "phase_total": message.get("phase_total"),
+                    "phase_kind": message.get("phase_kind"),
+                    "content": message.get("content") or "",
+                }
+            )
+        return transcript
+
+    async def _stream_practice_debater_turn(
+        self,
+        *,
+        websocket: WebSocket,
+        session_id: str,
+        debate_id: str,
+        topic: str,
+        human_side: str,
+        ai_side: str,
+        model: SupportedModel,
+        phase: dict[str, Any],
+        transcript: list[dict[str, Any]],
+        session_settings: dict[str, Any],
+        generation_settings: dict[str, Any],
+        cost_tracker: CostTracker | None,
+        is_last_round: bool,
+    ) -> str:
+        stream_id = str(uuid4())
+        await self._send_json(
+            websocket,
+            {
+                "type": "message_started",
+                "stream_id": stream_id,
+                "message": {
+                    "id": stream_id,
+                    "session_id": session_id,
+                    "debate_id": debate_id,
+                    "role": "practice_debater",
+                    "speaker": "Practice Debater",
+                    "model": model.name,
+                    "content": "",
+                    "phase_key": phase["key"],
+                    "phase_title": phase["title"],
+                    "phase_index": phase["index"],
+                    "phase_total": phase["total"],
+                    "phase_kind": phase["kind"],
+                    "sequence": 0,
+                    "created_at": utc_now(),
+                },
+                "round": phase["index"],
+            },
+        )
+        messages = self._practice_debater_messages(
+            session_id=session_id,
+            topic=topic,
+            human_side=human_side,
+            ai_side=ai_side,
+            transcript=transcript,
+            session_settings=session_settings,
+            generation_settings=generation_settings,
+            model=model,
+            is_last_round=is_last_round,
+        )
+        cost_start = len(cost_tracker.entries) if cost_tracker else 0
+        try:
+            content = await self._stream_completion(
+                websocket,
+                stream_id,
+                model,
+                messages,
+                session_settings=generation_settings,
+                cost_tracker=cost_tracker,
+                cost_operation="Practice Debater",
+            )
+        except ClientDisconnectedError:
+            raise
+        except Exception as exc:
+            await self._save_failed_stream_message(
+                websocket=websocket,
+                stream_id=stream_id,
+                session_id=session_id,
+                debate_id=debate_id,
+                role="practice_debater",
+                speaker="Practice Debater",
+                model=model.name,
+                exc=exc,
+                phase=phase,
+            )
+            raise
+        saved = self.db.add_message(
+            session_id=session_id,
+            debate_id=debate_id,
+            role="practice_debater",
+            speaker="Practice Debater",
+            model=model.name,
+            content=content,
+            cost_summary=cost_tracker.summary_since(
+                cost_start, session_settings.get("cost_currency", "USD")
+            )
+            if cost_tracker
+            else None,
+            phase=phase,
+        )
+        await self._send_json(
+            websocket,
+            {"type": "message_completed", "stream_id": stream_id, "message": saved},
+        )
+        return content
+
+    async def _stream_debate_trainer_turn(
+        self,
+        *,
+        websocket: WebSocket,
+        session_id: str,
+        debate_id: str,
+        topic: str,
+        human_side: str,
+        ai_side: str,
+        model: SupportedModel,
+        transcript: list[dict[str, Any]],
+        analysis: dict[str, Any],
+        judge_summary: str,
+        session_settings: dict[str, Any],
+        generation_settings: dict[str, Any],
+        cost_tracker: CostTracker | None,
+    ) -> str:
+        stream_id = str(uuid4())
+        await self._send_json(
+            websocket,
+            {
+                "type": "message_started",
+                "stream_id": stream_id,
+                "message": {
+                    "id": stream_id,
+                    "session_id": session_id,
+                    "debate_id": debate_id,
+                    "role": "debate_trainer",
+                    "speaker": "Debate Trainer",
+                    "model": model.name,
+                    "content": "",
+                    "sequence": 0,
+                    "created_at": utc_now(),
+                },
+                "round": "summary",
+            },
+        )
+        messages = self._debate_trainer_messages(
+            session_id=session_id,
+            topic=topic,
+            human_side=human_side,
+            ai_side=ai_side,
+            transcript=transcript,
+            analysis=analysis,
+            judge_summary=judge_summary,
+            session_settings=session_settings,
+            generation_settings=generation_settings,
+            model=model,
+        )
+        cost_start = len(cost_tracker.entries) if cost_tracker else 0
+        try:
+            content = await self._stream_completion(
+                websocket,
+                stream_id,
+                model,
+                messages,
+                session_settings=generation_settings,
+                cost_tracker=cost_tracker,
+                cost_operation="Debate Trainer",
+            )
+        except ClientDisconnectedError:
+            raise
+        except Exception as exc:
+            await self._save_failed_stream_message(
+                websocket=websocket,
+                stream_id=stream_id,
+                session_id=session_id,
+                debate_id=debate_id,
+                role="debate_trainer",
+                speaker="Debate Trainer",
+                model=model.name,
+                exc=exc,
+                cost_summary=cost_tracker.summary_since(
+                    cost_start, session_settings.get("cost_currency", "USD")
+                )
+                if cost_tracker
+                else None,
+            )
+            raise
+        saved = self.db.add_message(
+            session_id=session_id,
+            debate_id=debate_id,
+            role="debate_trainer",
+            speaker="Debate Trainer",
+            model=model.name,
+            content=content,
+            cost_summary=cost_tracker.summary_since(
+                cost_start, session_settings.get("cost_currency", "USD")
+            )
+            if cost_tracker
+            else None,
+        )
+        await self._send_json(
+            websocket,
+            {"type": "message_completed", "stream_id": stream_id, "message": saved},
+        )
+        return content
+
 
     def _council_assistant_always_on(self, session_settings: dict[str, Any]) -> bool:
         raw_agent_settings = session_settings.get("agent_settings") or {}
@@ -2122,12 +2799,17 @@ class DebateManager:
             "con",
             "con team",
             "con advocate",
+            "con case",
+            "con side",
             "negative",
             "opposing side",
             "opposing team",
             "against",
             "skeptical",
         )
+        comparison_winner = self._detect_comparison_winner(text)
+        if comparison_winner != "unclear":
+            return comparison_winner
         candidate_sentences = [
             sentence.strip()
             for sentence in re.split(r"(?<=[.!?。！？])\s+|\n+", text)
@@ -2148,12 +2830,52 @@ class DebateManager:
             )
         ]
         for sentence in candidate_sentences or [text]:
+            comparison_winner = self._detect_comparison_winner(sentence)
+            if comparison_winner != "unclear":
+                return comparison_winner
             pro_hit = any(re.search(rf"\b{re.escape(alias)}\b", sentence) for alias in pro_aliases)
             con_hit = any(re.search(rf"\b{re.escape(alias)}\b", sentence) for alias in con_aliases)
             if pro_hit and not con_hit:
                 return "pro"
             if con_hit and not pro_hit:
                 return "con"
+        return "unclear"
+
+    def _detect_comparison_winner(self, text: str) -> str:
+        side_aliases = {
+            "pro": r"(?:pro|pro\s+team|pro\s+advocate|pro\s+case|pro\s+side|affirmative)",
+            "con": r"(?:con|con\s+team|con\s+advocate|con\s+case|con\s+side|negative)",
+        }
+        winner_verbs = (
+            r"edges?\s+out",
+            r"beats?",
+            r"defeats?",
+            r"outweighs?",
+            r"prevails?\s+over",
+            r"wins?\s+over",
+            r"wins?\s+against",
+            r"has\s+the\s+stronger\s+case\s+than",
+            r"is\s+stronger\s+than",
+            r"is\s+more\s+persuasive\s+than",
+        )
+        loser_verbs = (
+            r"loses?\s+to",
+            r"falls?\s+to",
+            r"is\s+weaker\s+than",
+            r"is\s+less\s+persuasive\s+than",
+        )
+        for winner, loser in (("pro", "con"), ("con", "pro")):
+            if re.search(
+                rf"\b{side_aliases[winner]}\b[\s\S]{{0,80}}\b(?:{'|'.join(winner_verbs)})\b[\s\S]{{0,80}}\b{side_aliases[loser]}\b",
+                text,
+            ):
+                return winner
+        for loser, winner in (("pro", "con"), ("con", "pro")):
+            if re.search(
+                rf"\b{side_aliases[loser]}\b[\s\S]{{0,80}}\b(?:{'|'.join(loser_verbs)})\b[\s\S]{{0,80}}\b{side_aliases[winner]}\b",
+                text,
+            ):
+                return winner
         return "unclear"
 
     def _normalize_judge_summary(self, judge_summary: str, topic: str) -> str:
@@ -3242,6 +3964,216 @@ class DebateManager:
             },
         ]
 
+    def _practice_debater_messages(
+        self,
+        *,
+        session_id: str,
+        topic: str,
+        human_side: str,
+        ai_side: str,
+        transcript: list[dict[str, Any]],
+        session_settings: dict[str, Any],
+        generation_settings: dict[str, Any],
+        model: SupportedModel,
+        is_last_round: bool,
+    ) -> list[dict[str, str]]:
+        practice_settings = self._practice_settings(session_settings)
+        transcript_excerpt = self._format_transcript(
+            self._transcript_for_model(
+                transcript,
+                model_name=model.name,
+                reserve_tokens=int(generation_settings.get("max_tokens", 700)) + 1600,
+                hard_turn_cap=28,
+                topic=topic,
+            )
+        )
+        profile_context = self._practice_profile_context(session_settings)
+        human_label = human_side.upper()
+        ai_label = ai_side.upper()
+        last_round_note = (
+            "This is the final structured round. Make a clear closing appeal explaining why your side should win, while directly answering the user's strongest point."
+            if is_last_round
+            else "This is an active practice turn. Respond naturally, advance your side, and keep the debate moving."
+        )
+        return [
+            {
+                "role": "system",
+                "content": dedent(
+                    f"""
+                    You are Practice Debater, an AI sparring partner for human debate training.
+                    You are the {ai_label} side. The human user is the {human_label} side.
+                    Debate like a strong but fair human opponent: answer the user's actual point, press the strongest weakness, and make your side better.
+                    Address the user directly as "you" when referring to their arguments.
+                    Do not say "my opponent says" or describe yourself as following a user request.
+                    Never reveal hidden reasoning or <think> blocks.
+                    {last_round_note}
+
+                    Difficulty: {practice_settings.get("opponent_difficulty", "Adaptive")}
+                    Training focus: {practice_settings.get("training_focus", "Full Debate")}
+                    Tone: {session_settings.get("debate_tone", "Academic")}
+                    Language: {session_settings.get("language", "English")}
+                    Response length: {generation_settings.get("response_length", "Normal")}
+                    """
+                ).strip(),
+            },
+            {
+                "role": "user",
+                "content": dedent(
+                    f"""
+                    Practice debate topic:
+                    {topic}
+
+                    User debate profile:
+                    {profile_context}
+
+                    Transcript so far:
+                    {transcript_excerpt or "No public turns yet."}
+
+                    Your next move:
+                    - Defend the {ai_label} side.
+                    - Respond to the user's latest substantive claim.
+                    - Add one useful pressure point or clarification.
+                    - Keep it concise enough for a human practice exchange.
+                    """
+                ).strip(),
+            },
+        ]
+
+    def _debate_trainer_messages(
+        self,
+        *,
+        session_id: str,
+        topic: str,
+        human_side: str,
+        ai_side: str,
+        transcript: list[dict[str, Any]],
+        analysis: dict[str, Any],
+        judge_summary: str,
+        session_settings: dict[str, Any],
+        generation_settings: dict[str, Any],
+        model: SupportedModel,
+    ) -> list[dict[str, str]]:
+        practice_settings = self._practice_settings(session_settings)
+        transcript_excerpt = self._format_transcript(
+            self._transcript_for_model(
+                transcript,
+                model_name=model.name,
+                reserve_tokens=int(generation_settings.get("max_tokens", 700)) + 2200,
+                hard_turn_cap=40,
+                topic=topic,
+            )
+        )
+        profile_context = self._practice_profile_context(session_settings)
+        return [
+            {
+                "role": "system",
+                "content": dedent(
+                    f"""
+                    You are the Debate Trainer. You are a supportive, precise debate coach.
+                    Your goal is to help the human user improve, not to flatter them.
+                    Use only the transcript, Judge result, analytics, and saved profile below. Do not invent facts.
+                    Give practical advice the user can try next time.
+                    Never reveal hidden reasoning or <think> blocks.
+
+                    Coaching style: {practice_settings.get("trainer_style", "Coach")}
+                    Training focus: {practice_settings.get("training_focus", "Full Debate")}
+                    Language: {session_settings.get("language", "English")}
+                    Response length: {generation_settings.get("response_length", "Normal")}
+                    """
+                ).strip(),
+            },
+            {
+                "role": "user",
+                "content": dedent(
+                    f"""
+                    Practice topic: {topic}
+                    Human side: {human_side.upper()}
+                    Practice Debater side: {ai_side.upper()}
+
+                    Saved user debate profile:
+                    {profile_context}
+
+                    Transcript:
+                    {transcript_excerpt}
+
+                    Judge result:
+                    {judge_summary}
+
+                    Analytics:
+                    {format_analytics_report(analysis)}
+
+                    Write a coach report with:
+                    1. Overall diagnosis
+                    2. What you did well
+                    3. What cost you the most
+                    4. Dropped or under-answered arguments
+                    5. Style profile and the kind of opponent you handled well or poorly
+                    6. Three concrete drills for the next practice debate
+                    7. One sentence goal for next time
+                    """
+                ).strip(),
+            },
+        ]
+
+    def _practice_profile_context(self, session_settings: dict[str, Any]) -> str:
+        practice_settings = self._practice_settings(session_settings)
+        council_settings = self._council_settings_snapshot()
+        if not practice_settings.get("use_user_profile", True) or not council_settings.get(
+            "use_user_debate_profile", True
+        ):
+            return "User debate profile is off for this chat or council."
+        profile = self.db.get_user_debate_profile()
+        return json.dumps(profile, ensure_ascii=False, indent=2)
+
+    def _update_user_profile_from_practice(
+        self,
+        *,
+        debate_id: str,
+        human_side: str,
+        judge_summary: str,
+        trainer_report: str,
+    ) -> dict[str, Any]:
+        profile = self.db.get_user_debate_profile()
+        winner = self._detect_winner(judge_summary)
+        wins = profile.get("wins") if isinstance(profile.get("wins"), dict) else {}
+        side_history = profile.get("side_history") if isinstance(profile.get("side_history"), dict) else {}
+        winner_key = winner if winner in {"pro", "con"} else "unclear"
+        side_key = human_side if human_side in {"pro", "con"} else "auto"
+        strengths = list(profile.get("strengths") or [])
+        weaknesses = list(profile.get("weaknesses") or [])
+        notes = list(profile.get("trainer_notes") or [])
+        style_tags = list(profile.get("style_tags") or [])
+        if winner == human_side:
+            strengths.append(
+                f"Won as {human_side.upper()} in practice debate {debate_id[:8]} based on the Judge verdict."
+            )
+        elif winner in {"pro", "con"}:
+            weaknesses.append(
+                f"Lost as {human_side.upper()} in practice debate {debate_id[:8]}; review why the Judge preferred {winner.upper()}."
+            )
+        else:
+            weaknesses.append(
+                f"Practice debate {debate_id[:8]} ended unclear; work on making the winning path easier for the Judge to identify."
+            )
+        if trainer_report.strip():
+            notes.append(f"{debate_id[:8]}: {self._clip_for_prompt(trainer_report, 420)}")
+        style_tags.append("practice_debate")
+        return self.db.update_user_debate_profile(
+            {
+                "debates_completed": int(profile.get("debates_completed", 0) or 0) + 1,
+                "practice_debates_completed": int(profile.get("practice_debates_completed", 0) or 0) + 1,
+                "wins": {**wins, winner_key: int(wins.get(winner_key, 0) or 0) + 1},
+                "side_history": {
+                    **side_history,
+                    side_key: int(side_history.get(side_key, 0) or 0) + 1,
+                },
+                "strengths": strengths[-18:],
+                "weaknesses": weaknesses[-18:],
+                "trainer_notes": notes[-30:],
+                "style_tags": sorted(set(style_tags))[-12:],
+            }
+        )
+
     def _chat_messages(
         self,
         session_id: str,
@@ -3256,6 +4188,11 @@ class DebateManager:
             reserve_tokens=int(generation_settings.get("max_tokens", 700)) + 1400,
         )
         system_context = self._trim_prompt_block(self._system_context(session_id), 1000, char_cap=6000)
+        profile_context = self._trim_prompt_block(
+            self._practice_profile_context(session_settings),
+            650,
+            char_cap=3500,
+        )
         formatted_history = "\n".join(
             f"{message['speaker']} ({message['role']}): {message['content']}"
             for message in history
@@ -3288,6 +4225,9 @@ class DebateManager:
                     f"""
                     Chat memory:
                     {formatted_history or "No previous messages yet."}
+
+                    User debate profile:
+                    {profile_context}
 
                     Current user message:
                     {user_message}

@@ -16,13 +16,23 @@ from .costing import normalize_currency
 SESSION_COUNTER_KEY = "session_counter"
 DEFAULT_SESSION_PREFIX = "Debate Session #"
 DEFAULT_DEBATE_PREFIX = "Debate #"
+DEFAULT_PRACTICE_PREFIX = "Practice Debate #"
 COUNCIL_SETTINGS_KEY = "council_settings"
+USER_DEBATE_PROFILE_KEY = "user_debate_profile"
+CHAT_MODES = {"ai_vs_ai", "ai_vs_human"}
+DEFAULT_CONFIRMATION_PREFERENCES = {
+    "delete_chat": False,
+    "clear_chat_history": False,
+    "clear_chat_memory": False,
+}
 DEFAULT_COUNCIL_SETTINGS = {
     "universal_experience": True,
     "use_agent_identity_profiles": True,
+    "use_user_debate_profile": True,
     "debate_intelligence_depth": "Normal",
     "use_value_consequence_system": True,
     "default_judge_mode": "Hybrid",
+    "confirmation_preferences": DEFAULT_CONFIRMATION_PREFERENCES,
 }
 COUNCIL_SETTING_CHOICES = {
     "debate_intelligence_depth": {"Light", "Normal", "Deep"},
@@ -41,6 +51,8 @@ def _int_env(name: str, default: int, minimum: int, maximum: int) -> int:
 DEFAULT_DEBATE_ROUNDS = _int_env("DEBATE_ROUNDS", 2, 1, 6)
 AGENT_ROLE_KEYS = (
     "council_assistant",
+    "practice_debater",
+    "debate_trainer",
     "lead_advocate",
     "rebuttal_critic",
     "evidence_researcher",
@@ -94,6 +106,27 @@ DEFAULT_SESSION_SETTINGS = {
     "use_experience": True,
     "judge_mode": "Hybrid",
     "evidence_strictness": "Normal",
+    "practice_settings": {
+        "human_side": "Auto",
+        "practice_flow": "Free",
+        "structured_rounds": 3,
+        "use_user_profile": True,
+        "trainer_style": "Coach",
+        "training_focus": "Full Debate",
+        "opponent_difficulty": "Adaptive",
+    },
+}
+DEFAULT_USER_DEBATE_PROFILE = {
+    "version": 1,
+    "debates_completed": 0,
+    "practice_debates_completed": 0,
+    "wins": {"pro": 0, "con": 0, "unclear": 0},
+    "side_history": {"pro": 0, "con": 0, "auto": 0},
+    "strengths": [],
+    "weaknesses": [],
+    "trainer_notes": [],
+    "style_tags": [],
+    "last_updated_at": "",
 }
 
 
@@ -103,6 +136,21 @@ def utc_now() -> str:
 
 def row_to_dict(row: sqlite3.Row | None) -> dict | None:
     return dict(row) if row else None
+
+
+def debate_row_to_dict(row: sqlite3.Row | None) -> dict | None:
+    if not row:
+        return None
+    payload = dict(row)
+    raw_metadata = payload.get("metadata")
+    if raw_metadata:
+        try:
+            payload["metadata"] = json.loads(raw_metadata)
+        except json.JSONDecodeError:
+            payload["metadata"] = {}
+    else:
+        payload["metadata"] = {}
+    return payload
 
 
 def message_row_to_dict(row: sqlite3.Row | None) -> dict | None:
@@ -159,6 +207,7 @@ class Database:
                 CREATE TABLE IF NOT EXISTS sessions (
                     id TEXT PRIMARY KEY,
                     name TEXT NOT NULL,
+                    mode TEXT NOT NULL DEFAULT 'ai_vs_ai',
                     default_index INTEGER NOT NULL,
                     created_at TEXT NOT NULL,
                     updated_at TEXT NOT NULL
@@ -193,6 +242,7 @@ class Database:
                     use_experience INTEGER NOT NULL DEFAULT 1,
                     judge_mode TEXT NOT NULL DEFAULT 'Hybrid',
                     evidence_strictness TEXT NOT NULL DEFAULT 'Normal',
+                    practice_settings TEXT NOT NULL DEFAULT '{}',
                     updated_at TEXT NOT NULL,
                     FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
                 );
@@ -207,6 +257,7 @@ class Database:
                     status TEXT NOT NULL,
                     judge_summary TEXT,
                     error TEXT,
+                    metadata TEXT NOT NULL DEFAULT '{}',
                     started_at TEXT NOT NULL,
                     finished_at TEXT,
                     hidden_at TEXT,
@@ -311,6 +362,13 @@ class Database:
             )
             connection.execute(
                 """
+                INSERT OR IGNORE INTO app_metadata (key, value)
+                VALUES (?, ?)
+                """,
+                (USER_DEBATE_PROFILE_KEY, json.dumps(DEFAULT_USER_DEBATE_PROFILE)),
+            )
+            connection.execute(
+                """
                 UPDATE app_metadata
                 SET value = (
                     SELECT CAST(COALESCE(MAX(default_index), 0) AS TEXT)
@@ -326,9 +384,20 @@ class Database:
             )
             self._ensure_settings_schema(connection)
             self._ensure_history_schema(connection)
+            self._ensure_session_schema(connection)
             rows = connection.execute("SELECT id FROM sessions").fetchall()
             for row in rows:
                 self._ensure_settings(connection, row["id"])
+
+    def _ensure_session_schema(self, connection: sqlite3.Connection) -> None:
+        columns = {
+            row["name"]
+            for row in connection.execute("PRAGMA table_info(sessions)").fetchall()
+        }
+        if "mode" not in columns:
+            connection.execute(
+                "ALTER TABLE sessions ADD COLUMN mode TEXT NOT NULL DEFAULT 'ai_vs_ai'"
+            )
 
     def _ensure_settings_schema(self, connection: sqlite3.Connection) -> None:
         columns = {
@@ -383,6 +452,10 @@ class Database:
             connection.execute(
                 "ALTER TABLE session_settings ADD COLUMN evidence_strictness TEXT NOT NULL DEFAULT 'Normal'"
             )
+        if "practice_settings" not in columns:
+            connection.execute(
+                "ALTER TABLE session_settings ADD COLUMN practice_settings TEXT NOT NULL DEFAULT '{}'"
+            )
 
     def _ensure_history_schema(self, connection: sqlite3.Connection) -> None:
         debate_columns = {
@@ -399,6 +472,8 @@ class Database:
             )
         if "mode" not in debate_columns:
             connection.execute("ALTER TABLE debates ADD COLUMN mode TEXT NOT NULL DEFAULT ''")
+        if "metadata" not in debate_columns:
+            connection.execute("ALTER TABLE debates ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'")
 
         debate_rows = connection.execute(
             "SELECT id, session_id, started_at FROM debates ORDER BY session_id, started_at ASC"
@@ -521,9 +596,16 @@ class Database:
 
     def _normalize_council_settings(self, payload: dict) -> dict:
         merged = {**DEFAULT_COUNCIL_SETTINGS, **(payload or {})}
+        raw_preferences = merged.get("confirmation_preferences")
+        preferences = (
+            raw_preferences
+            if isinstance(raw_preferences, dict)
+            else DEFAULT_CONFIRMATION_PREFERENCES
+        )
         return {
             "universal_experience": bool(merged.get("universal_experience", True)),
             "use_agent_identity_profiles": bool(merged.get("use_agent_identity_profiles", True)),
+            "use_user_debate_profile": bool(merged.get("use_user_debate_profile", True)),
             "debate_intelligence_depth": self._normalize_choice(
                 merged.get("debate_intelligence_depth", "Normal"),
                 COUNCIL_SETTING_CHOICES["debate_intelligence_depth"],
@@ -537,7 +619,94 @@ class Database:
                 COUNCIL_SETTING_CHOICES["default_judge_mode"],
                 "Hybrid",
             ),
+            "confirmation_preferences": {
+                key: bool(preferences.get(key, default_value))
+                for key, default_value in DEFAULT_CONFIRMATION_PREFERENCES.items()
+            },
         }
+
+    def get_user_debate_profile(self) -> dict:
+        with self.lock, self.session() as connection:
+            row = connection.execute(
+                "SELECT value FROM app_metadata WHERE key = ?", (USER_DEBATE_PROFILE_KEY,)
+            ).fetchone()
+            raw = self._json_payload(row["value"], {}) if row else {}
+            return self._normalize_user_debate_profile(raw)
+
+    def update_user_debate_profile(self, updates: dict) -> dict:
+        with self.lock, self.session() as connection:
+            row = connection.execute(
+                "SELECT value FROM app_metadata WHERE key = ?", (USER_DEBATE_PROFILE_KEY,)
+            ).fetchone()
+            current = self._normalize_user_debate_profile(
+                self._json_payload(row["value"], {}) if row else {}
+            )
+            next_profile = self._normalize_user_debate_profile({**current, **updates})
+            next_profile["last_updated_at"] = utc_now()
+            connection.execute(
+                """
+                INSERT INTO app_metadata (key, value)
+                VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (USER_DEBATE_PROFILE_KEY, json.dumps(next_profile)),
+            )
+            return next_profile
+
+    def reset_user_debate_profile(self) -> dict:
+        with self.lock, self.session() as connection:
+            next_profile = {**DEFAULT_USER_DEBATE_PROFILE, "last_updated_at": utc_now()}
+            connection.execute(
+                """
+                INSERT INTO app_metadata (key, value)
+                VALUES (?, ?)
+                ON CONFLICT(key) DO UPDATE SET value = excluded.value
+                """,
+                (USER_DEBATE_PROFILE_KEY, json.dumps(next_profile)),
+            )
+            return next_profile
+
+    def _normalize_user_debate_profile(self, payload: object) -> dict:
+        raw = payload if isinstance(payload, dict) else {}
+        merged = {**DEFAULT_USER_DEBATE_PROFILE, **raw}
+        wins = merged.get("wins") if isinstance(merged.get("wins"), dict) else {}
+        side_history = (
+            merged.get("side_history") if isinstance(merged.get("side_history"), dict) else {}
+        )
+        return {
+            "version": 1,
+            "debates_completed": self._bounded_int(
+                merged.get("debates_completed", 0), 0, 0, 1_000_000
+            ),
+            "practice_debates_completed": self._bounded_int(
+                merged.get("practice_debates_completed", 0), 0, 0, 1_000_000
+            ),
+            "wins": {
+                key: self._bounded_int(wins.get(key, 0), 0, 0, 1_000_000)
+                for key in ("pro", "con", "unclear")
+            },
+            "side_history": {
+                key: self._bounded_int(side_history.get(key, 0), 0, 0, 1_000_000)
+                for key in ("pro", "con", "auto")
+            },
+            "strengths": self._bounded_string_list(merged.get("strengths"), 18),
+            "weaknesses": self._bounded_string_list(merged.get("weaknesses"), 18),
+            "trainer_notes": self._bounded_string_list(merged.get("trainer_notes"), 30),
+            "style_tags": self._bounded_string_list(merged.get("style_tags"), 12),
+            "last_updated_at": str(merged.get("last_updated_at", "")),
+        }
+
+    def _bounded_string_list(self, value: object, limit: int) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        cleaned = []
+        for item in value:
+            text = " ".join(str(item).split()).strip()
+            if text and text not in cleaned:
+                cleaned.append(text[:260])
+            if len(cleaned) >= limit:
+                break
+        return cleaned
 
     def list_sessions(self) -> list[dict]:
         with self.lock, self.session() as connection:
@@ -557,7 +726,14 @@ class Database:
             ).fetchone()
             return row_to_dict(row)
 
-    def create_session(self, max_sessions: int) -> dict:
+    def create_session(
+        self,
+        max_sessions: int,
+        *,
+        mode: str = "ai_vs_ai",
+        settings_updates: dict | None = None,
+    ) -> dict:
+        cleaned_mode = mode if mode in CHAT_MODES else "ai_vs_ai"
         with self.lock, self.session(immediate=True) as connection:
             session_count = connection.execute(
                 "SELECT COUNT(*) AS total FROM sessions"
@@ -581,10 +757,17 @@ class Database:
             session_id = str(uuid4())
             connection.execute(
                 """
-                INSERT INTO sessions (id, name, default_index, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO sessions (id, name, mode, default_index, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (session_id, f"{DEFAULT_SESSION_PREFIX}{counter}", counter, now, now),
+                (
+                    session_id,
+                    f"{DEFAULT_SESSION_PREFIX}{counter}",
+                    cleaned_mode,
+                    counter,
+                    now,
+                    now,
+                ),
             )
             connection.execute(
                 """
@@ -595,6 +778,14 @@ class Database:
                 (SESSION_COUNTER_KEY, str(counter)),
             )
             self._ensure_settings(connection, session_id)
+            if settings_updates:
+                current = self._settings_row_to_dict(
+                    connection.execute(
+                        "SELECT * FROM session_settings WHERE session_id = ?", (session_id,)
+                    ).fetchone()
+                )
+                next_settings = self._normalize_settings({**(current or {}), **settings_updates})
+                self._update_settings_from_connection(connection, session_id, next_settings)
             row = connection.execute(
                 "SELECT * FROM sessions WHERE id = ?", (session_id,)
             ).fetchone()
@@ -634,9 +825,10 @@ class Database:
                 use_experience,
                 judge_mode,
                 evidence_strictness,
+                practice_settings,
                 updated_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 session_id,
@@ -667,6 +859,7 @@ class Database:
                 int(DEFAULT_SESSION_SETTINGS["use_experience"]),
                 council_defaults["default_judge_mode"],
                 DEFAULT_SESSION_SETTINGS["evidence_strictness"],
+                json.dumps(DEFAULT_SESSION_SETTINGS["practice_settings"]),
                 now,
             ),
         )
@@ -701,72 +894,82 @@ class Database:
                 ).fetchone()
             )
             next_settings = self._normalize_settings({**(current or {}), **cleaned})
-            connection.execute(
-                """
-                UPDATE session_settings
-                SET overall_model = ?,
-                    debaters_per_team = ?,
-                    discussion_messages_per_team = ?,
-                    judge_assistant_enabled = ?,
-                    agent_settings = ?,
-                    role_models = ?,
-                    temperature = ?,
-                    max_tokens = ?,
-                    debate_tone = ?,
-                    language = ?,
-                    response_length = ?,
-                    auto_scroll = ?,
-                    show_timestamps = ?,
-                    show_token_count = ?,
-                    show_money_cost = ?,
-                    cost_currency = ?,
-                    show_model_costs = ?,
-                    show_every_message_cost_in_debate = ?,
-                    context_window = ?,
-                    debate_rounds = ?,
-                    researcher_web_search = ?,
-                    fact_check_mode = ?,
-                    export_format = ?,
-                    auto_save_interval = ?,
-                    use_experience = ?,
-                    judge_mode = ?,
-                    evidence_strictness = ?,
-                    updated_at = ?
-                WHERE session_id = ?
-                """,
-                (
-                    next_settings["overall_model"],
-                    next_settings["debaters_per_team"],
-                    next_settings["discussion_messages_per_team"],
-                    int(next_settings["judge_assistant_enabled"]),
-                    json.dumps(next_settings["agent_settings"]),
-                    json.dumps(next_settings["role_models"]),
-                    next_settings["temperature"],
-                    next_settings["max_tokens"],
-                    next_settings["debate_tone"],
-                    next_settings["language"],
-                    next_settings["response_length"],
-                    int(next_settings["auto_scroll"]),
-                    int(next_settings["show_timestamps"]),
-                    int(next_settings["show_token_count"]),
-                    int(next_settings["show_money_cost"]),
-                    next_settings["cost_currency"],
-                    int(next_settings["show_model_costs"]),
-                    int(next_settings["show_every_message_cost_in_debate"]),
-                    next_settings["context_window"],
-                    next_settings["debate_rounds"],
-                    int(next_settings["researcher_web_search"]),
-                    int(next_settings["fact_check_mode"]),
-                    next_settings["export_format"],
-                    next_settings["auto_save_interval"],
-                    int(next_settings["use_experience"]),
-                    next_settings["judge_mode"],
-                    next_settings["evidence_strictness"],
-                    utc_now(),
-                    session_id,
-                ),
-            )
+            self._update_settings_from_connection(connection, session_id, next_settings)
             return next_settings
+
+    def _update_settings_from_connection(
+        self,
+        connection: sqlite3.Connection,
+        session_id: str,
+        next_settings: dict,
+    ) -> None:
+        connection.execute(
+            """
+            UPDATE session_settings
+            SET overall_model = ?,
+                debaters_per_team = ?,
+                discussion_messages_per_team = ?,
+                judge_assistant_enabled = ?,
+                agent_settings = ?,
+                role_models = ?,
+                temperature = ?,
+                max_tokens = ?,
+                debate_tone = ?,
+                language = ?,
+                response_length = ?,
+                auto_scroll = ?,
+                show_timestamps = ?,
+                show_token_count = ?,
+                show_money_cost = ?,
+                cost_currency = ?,
+                show_model_costs = ?,
+                show_every_message_cost_in_debate = ?,
+                context_window = ?,
+                debate_rounds = ?,
+                researcher_web_search = ?,
+                fact_check_mode = ?,
+                export_format = ?,
+                auto_save_interval = ?,
+                use_experience = ?,
+                judge_mode = ?,
+                evidence_strictness = ?,
+                practice_settings = ?,
+                updated_at = ?
+            WHERE session_id = ?
+            """,
+            (
+                next_settings["overall_model"],
+                next_settings["debaters_per_team"],
+                next_settings["discussion_messages_per_team"],
+                int(next_settings["judge_assistant_enabled"]),
+                json.dumps(next_settings["agent_settings"]),
+                json.dumps(next_settings["role_models"]),
+                next_settings["temperature"],
+                next_settings["max_tokens"],
+                next_settings["debate_tone"],
+                next_settings["language"],
+                next_settings["response_length"],
+                int(next_settings["auto_scroll"]),
+                int(next_settings["show_timestamps"]),
+                int(next_settings["show_token_count"]),
+                int(next_settings["show_money_cost"]),
+                next_settings["cost_currency"],
+                int(next_settings["show_model_costs"]),
+                int(next_settings["show_every_message_cost_in_debate"]),
+                next_settings["context_window"],
+                next_settings["debate_rounds"],
+                int(next_settings["researcher_web_search"]),
+                int(next_settings["fact_check_mode"]),
+                next_settings["export_format"],
+                next_settings["auto_save_interval"],
+                int(next_settings["use_experience"]),
+                next_settings["judge_mode"],
+                next_settings["evidence_strictness"],
+                json.dumps(next_settings["practice_settings"]),
+                utc_now(),
+                session_id,
+            ),
+        )
 
     def _settings_row_to_dict(self, row: sqlite3.Row | None) -> dict | None:
         if not row:
@@ -800,6 +1003,7 @@ class Database:
                 "use_experience": bool(row["use_experience"]),
                 "judge_mode": row["judge_mode"],
                 "evidence_strictness": row["evidence_strictness"],
+                "practice_settings": self._json_payload(row["practice_settings"], {}),
                 "updated_at": row["updated_at"],
             }
         )
@@ -848,7 +1052,48 @@ class Database:
                 {"Relaxed", "Normal", "Strict"},
                 "Normal",
             ),
+            "practice_settings": self._normalize_practice_settings(
+                merged.get("practice_settings") or {}
+            ),
             "updated_at": str(merged.get("updated_at", utc_now())),
+        }
+
+    def _normalize_practice_settings(self, payload: object) -> dict:
+        raw = payload if isinstance(payload, dict) else {}
+        merged = {**DEFAULT_SESSION_SETTINGS["practice_settings"], **raw}
+        return {
+            "human_side": self._normalize_choice(
+                merged.get("human_side", "Auto"),
+                {"Auto", "Pro", "Con"},
+                "Auto",
+            ),
+            "practice_flow": self._normalize_choice(
+                merged.get("practice_flow", "Free"),
+                {"Free", "Structured"},
+                "Free",
+            ),
+            "structured_rounds": self._bounded_int(
+                merged.get("structured_rounds", 3),
+                3,
+                1,
+                12,
+            ),
+            "use_user_profile": bool(merged.get("use_user_profile", True)),
+            "trainer_style": self._normalize_choice(
+                merged.get("trainer_style", "Coach"),
+                {"Coach", "Direct", "Gentle", "Examiner"},
+                "Coach",
+            ),
+            "training_focus": self._normalize_choice(
+                merged.get("training_focus", "Full Debate"),
+                {"Full Debate", "Rebuttal", "Evidence", "Clarity", "Cross-Examination"},
+                "Full Debate",
+            ),
+            "opponent_difficulty": self._normalize_choice(
+                merged.get("opponent_difficulty", "Adaptive"),
+                {"Adaptive", "Beginner", "Normal", "Hard"},
+                "Adaptive",
+            ),
         }
 
     def _normalize_agent_settings(
@@ -980,21 +1225,30 @@ class Database:
                 (utc_now(), session_id),
             )
 
-    def create_debate(self, session_id: str, topic: str, *, mode: str = "debate") -> dict:
+    def create_debate(
+        self,
+        session_id: str,
+        topic: str,
+        *,
+        mode: str = "debate",
+        metadata: dict | None = None,
+    ) -> dict:
+        cleaned_mode = mode if mode in {"debate", "chat", "practice"} else "debate"
         with self.lock, self.session() as connection:
             now = utc_now()
             debate_id = str(uuid4())
-            visible_debate_count = connection.execute(
-                """
-                SELECT COUNT(*) AS total
-                FROM debates
-                WHERE session_id = ?
-                  AND mode = 'debate'
-                  AND hidden_at IS NULL
-                """,
-                (session_id,),
-            ).fetchone()["total"]
-            if mode == "debate":
+            if cleaned_mode in {"debate", "practice"}:
+                prefix = DEFAULT_PRACTICE_PREFIX if cleaned_mode == "practice" else DEFAULT_DEBATE_PREFIX
+                visible_debate_count = connection.execute(
+                    """
+                    SELECT COUNT(*) AS total
+                    FROM debates
+                    WHERE session_id = ?
+                      AND mode = ?
+                      AND hidden_at IS NULL
+                    """,
+                    (session_id, cleaned_mode),
+                ).fetchone()["total"]
                 if visible_debate_count == 0:
                     debate_index = 1
                 else:
@@ -1004,23 +1258,32 @@ class Database:
                             SELECT COALESCE(MAX(default_index), 0) + 1 AS next_index
                             FROM debates
                             WHERE session_id = ?
-                              AND mode = 'debate'
+                              AND mode = ?
                             """,
-                            (session_id,),
+                            (session_id, cleaned_mode),
                         ).fetchone()["next_index"]
                         or 1
                     )
-                debate_name = f"{DEFAULT_DEBATE_PREFIX}{debate_index}"
+                debate_name = f"{prefix}{debate_index}"
             else:
                 debate_index = 0
                 debate_name = "Council Assistant Chat"
             connection.execute(
                 """
                 INSERT INTO debates
-                    (id, session_id, name, default_index, mode, topic, status, started_at, hidden_at)
-                VALUES (?, ?, ?, ?, ?, ?, 'running', ?, NULL)
+                    (id, session_id, name, default_index, mode, topic, status, metadata, started_at, hidden_at)
+                VALUES (?, ?, ?, ?, ?, ?, 'running', ?, ?, NULL)
                 """,
-                (debate_id, session_id, debate_name, debate_index, mode, topic, now),
+                (
+                    debate_id,
+                    session_id,
+                    debate_name,
+                    debate_index,
+                    cleaned_mode,
+                    topic,
+                    json.dumps(metadata or {}),
+                    now,
+                ),
             )
             connection.execute(
                 "UPDATE sessions SET updated_at = ? WHERE id = ?", (now, session_id)
@@ -1028,7 +1291,7 @@ class Database:
             row = connection.execute(
                 "SELECT * FROM debates WHERE id = ?", (debate_id,)
             ).fetchone()
-            return row_to_dict(row) or {}
+            return debate_row_to_dict(row) or {}
 
     def complete_debate(self, debate_id: str, judge_summary: str) -> None:
         with self.lock, self.session() as connection:
@@ -1052,6 +1315,29 @@ class Database:
                 (error[:1000], utc_now(), debate_id),
             )
 
+    def update_debate_metadata(self, debate_id: str, updates: dict) -> dict | None:
+        with self.lock, self.session() as connection:
+            row = connection.execute(
+                "SELECT * FROM debates WHERE id = ?", (debate_id,)
+            ).fetchone()
+            current = debate_row_to_dict(row)
+            if not current:
+                return None
+            metadata = current.get("metadata") if isinstance(current.get("metadata"), dict) else {}
+            next_metadata = {**metadata, **updates}
+            connection.execute(
+                """
+                UPDATE debates
+                SET metadata = ?
+                WHERE id = ?
+                """,
+                (json.dumps(next_metadata), debate_id),
+            )
+            updated = connection.execute(
+                "SELECT * FROM debates WHERE id = ?", (debate_id,)
+            ).fetchone()
+            return debate_row_to_dict(updated)
+
     def list_debates(self, session_id: str, *, include_hidden: bool = False) -> list[dict]:
         with self.lock, self.session() as connection:
             visibility_clause = "" if include_hidden else "AND hidden_at IS NULL"
@@ -1060,13 +1346,13 @@ class Database:
                 SELECT *
                 FROM debates
                 WHERE session_id = ?
-                  AND mode = 'debate'
+                  AND mode IN ('debate', 'practice')
                   {visibility_clause}
                 ORDER BY default_index DESC, started_at DESC
                 """,
                 (session_id,),
             ).fetchall()
-            return [dict(row) for row in rows]
+            return [debate_row_to_dict(row) or {} for row in rows]
 
     def get_debate(
         self, session_id: str, debate_id: str, *, include_hidden: bool = False
@@ -1079,12 +1365,29 @@ class Database:
                 FROM debates
                 WHERE id = ?
                   AND session_id = ?
-                  AND mode = 'debate'
+                  AND mode IN ('debate', 'practice')
                   {visibility_clause}
                 """,
                 (debate_id, session_id),
             ).fetchone()
-            return row_to_dict(row)
+            return debate_row_to_dict(row)
+
+    def get_active_practice_debate(self, session_id: str) -> dict | None:
+        with self.lock, self.session() as connection:
+            row = connection.execute(
+                """
+                SELECT *
+                FROM debates
+                WHERE session_id = ?
+                  AND mode = 'practice'
+                  AND status = 'running'
+                  AND hidden_at IS NULL
+                ORDER BY started_at DESC
+                LIMIT 1
+                """,
+                (session_id,),
+            ).fetchone()
+            return debate_row_to_dict(row)
 
     def rename_debate(self, session_id: str, debate_id: str, name: str) -> dict | None:
         cleaned = " ".join(name.strip().split())
@@ -1100,7 +1403,7 @@ class Database:
                 SET name = ?
                 WHERE id = ?
                   AND session_id = ?
-                  AND mode = 'debate'
+                  AND mode IN ('debate', 'practice')
                   AND hidden_at IS NULL
                 """,
                 (cleaned, debate_id, session_id),
@@ -1114,7 +1417,7 @@ class Database:
                 "SELECT * FROM debates WHERE id = ? AND session_id = ?",
                 (debate_id, session_id),
             ).fetchone()
-            return row_to_dict(row)
+            return debate_row_to_dict(row)
 
     def hide_debate_statistics(self, session_id: str, debate_id: str) -> bool:
         with self.lock, self.session() as connection:
@@ -1125,7 +1428,7 @@ class Database:
                 SET hidden_at = ?
                 WHERE id = ?
                   AND session_id = ?
-                  AND mode = 'debate'
+                  AND mode IN ('debate', 'practice')
                   AND hidden_at IS NULL
                 """,
                 (now, debate_id, session_id),

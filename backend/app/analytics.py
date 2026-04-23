@@ -333,6 +333,9 @@ def _infer_debate_winner(summary: str) -> str:
         if token in {"con", "negative"}:
             return "con"
         return "unclear"
+    comparison_winner = _comparison_winner(normalized)
+    if comparison_winner != "unclear":
+        return comparison_winner
     sentences = [
         sentence.strip()
         for sentence in re.split(r"(?<=[.!?。！？])\s+|\n+", normalized)
@@ -344,6 +347,9 @@ def _infer_debate_winner(summary: str) -> str:
         if any(re.search(pattern, sentence) for pattern in WIN_SIGNAL_PATTERNS)
     ] or sentences[-3:]
     for sentence in candidate_sentences:
+        comparison_winner = _comparison_winner(sentence)
+        if comparison_winner != "unclear":
+            return comparison_winner
         pro_hit = _contains_any_alias(sentence, PRO_WIN_ALIASES)
         con_hit = _contains_any_alias(sentence, CON_WIN_ALIASES)
         if pro_hit and not con_hit:
@@ -853,6 +859,44 @@ def _normalize_winner_text(text: str) -> str:
 
 def _contains_any_alias(text: str, aliases: tuple[str, ...]) -> bool:
     return any(re.search(rf"\b{re.escape(alias)}\b", text) for alias in aliases)
+
+
+def _comparison_winner(text: str) -> str:
+    side_aliases = {
+        "pro": r"(?:pro|pro\s+team|pro\s+advocate|pro\s+case|pro\s+side|affirmative)",
+        "con": r"(?:con|con\s+team|con\s+advocate|con\s+case|con\s+side|negative)",
+    }
+    winner_verbs = (
+        r"edges?\s+out",
+        r"beats?",
+        r"defeats?",
+        r"outweighs?",
+        r"prevails?\s+over",
+        r"wins?\s+over",
+        r"wins?\s+against",
+        r"has\s+the\s+stronger\s+case\s+than",
+        r"is\s+stronger\s+than",
+        r"is\s+more\s+persuasive\s+than",
+    )
+    loser_verbs = (
+        r"loses?\s+to",
+        r"falls?\s+to",
+        r"is\s+weaker\s+than",
+        r"is\s+less\s+persuasive\s+than",
+    )
+    for winner, loser in (("pro", "con"), ("con", "pro")):
+        if re.search(
+            rf"\b{side_aliases[winner]}\b[\s\S]{{0,80}}\b(?:{'|'.join(winner_verbs)})\b[\s\S]{{0,80}}\b{side_aliases[loser]}\b",
+            text,
+        ):
+            return winner
+    for loser, winner in (("pro", "con"), ("con", "pro")):
+        if re.search(
+            rf"\b{side_aliases[loser]}\b[\s\S]{{0,80}}\b(?:{'|'.join(loser_verbs)})\b[\s\S]{{0,80}}\b{side_aliases[winner]}\b",
+            text,
+        ):
+            return winner
+    return "unclear"
 
 
 def _is_cjk_token(token: str) -> bool:

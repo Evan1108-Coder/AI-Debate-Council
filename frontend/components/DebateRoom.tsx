@@ -14,6 +14,7 @@ import type {
   DebateMessage,
   DebateRecord,
   ModelsResponse,
+  PracticeState,
   SessionSettings,
   SupportedModel
 } from "@/types";
@@ -34,6 +35,7 @@ type DebateRoomProps = {
   analytics: DebateAnalytics | null;
   analyticsHistory: DebateAnalytics[];
   intelligence: DebateIntelligence | null;
+  practiceState: PracticeState | null;
   isTeamPreparing: boolean;
   showCouncilSettings: boolean;
   councilSettings: CouncilSettings | null;
@@ -47,9 +49,11 @@ type DebateRoomProps = {
   onModelChange: (modelName: string) => void;
   onDebateChange: (debateId: string) => void;
   onSend: () => void;
+  onEndPractice: () => void;
   onSettingsChange: (updates: Partial<SessionSettings>) => void;
   onCouncilSettingsChange: (updates: Partial<CouncilSettings>) => void;
   onResetUniversalIdentities: (confirmation: string) => Promise<{ deleted: number }>;
+  onResetUserDebateProfile: (confirmation: string) => Promise<unknown>;
   onFeedbackSubmit: (questionKey: string, answer: string) => Promise<void>;
   onRename: (session: ChatSession, name: string) => Promise<boolean>;
   onRenameDebate: (debate: DebateRecord, name: string) => Promise<boolean>;
@@ -74,7 +78,10 @@ const roleStyles: Record<string, string> = {
   con_evidence_researcher: "border-l-4 border-l-sky-700",
   con_cross_examiner: "border-l-4 border-l-amber-600",
   judge_assistant: "border-l-4 border-l-zinc-500",
-  judge: "border-l-4 border-l-zinc-950"
+  judge: "border-l-4 border-l-zinc-950",
+  practice_user: "border-l-4 border-l-emerald-700",
+  practice_debater: "border-l-4 border-l-red-700",
+  debate_trainer: "border-l-4 border-l-cyan-700"
 };
 
 const panels: Array<{ id: RoomPanel; label: string }> = [
@@ -144,6 +151,7 @@ export function DebateRoom({
   analytics,
   analyticsHistory,
   intelligence,
+  practiceState,
   isTeamPreparing,
   showCouncilSettings,
   councilSettings,
@@ -157,9 +165,11 @@ export function DebateRoom({
   onModelChange,
   onDebateChange,
   onSend,
+  onEndPractice,
   onSettingsChange,
   onCouncilSettingsChange,
   onResetUniversalIdentities,
+  onResetUserDebateProfile,
   onFeedbackSubmit,
   onRename,
   onRenameDebate,
@@ -196,6 +206,7 @@ export function DebateRoom({
           settings={councilSettings}
           onChange={onCouncilSettingsChange}
           onResetUniversalIdentities={onResetUniversalIdentities}
+          onResetUserDebateProfile={onResetUserDebateProfile}
         />
       </main>
     );
@@ -216,14 +227,45 @@ export function DebateRoom({
       <section className="border-b border-zinc-300 bg-white p-4">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
-            <p className="text-sm font-medium text-emerald-700">Council room</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <p className="text-sm font-medium text-emerald-700">
+                {selectedSession.mode === "ai_vs_human" ? "Practice room" : "Council room"}
+              </p>
+              <span className="rounded bg-zinc-100 px-2 py-1 text-xs font-semibold text-zinc-700">
+                {selectedSession.mode === "ai_vs_human" ? "AI vs Human" : "AI vs AI"}
+              </span>
+              {selectedSession.mode === "ai_vs_human" && practiceState?.active ? (
+                <span className="rounded bg-emerald-100 px-2 py-1 text-xs font-semibold text-emerald-800">
+                  You: {(practiceState.human_side || "").toUpperCase()} · Practice Debater: {(practiceState.ai_side || "").toUpperCase()}
+                </span>
+              ) : null}
+              {selectedSession.mode === "ai_vs_human" &&
+              practiceState?.active &&
+              practiceState.practice_flow === "Structured" ? (
+                <span className="rounded bg-zinc-100 px-2 py-1 text-xs font-semibold text-zinc-700">
+                  {practiceState.rounds_left ?? 0} round(s) left
+                </span>
+              ) : null}
+            </div>
             <h2 className="truncate text-2xl font-semibold text-zinc-950">
               {selectedSession?.name ?? "No session selected"}
             </h2>
             <p className="mt-1 text-sm text-zinc-600">{status}</p>
           </div>
 
-          <ProviderReadiness models={models} />
+          <div className="flex flex-col gap-3 lg:items-end">
+            {selectedSession.mode === "ai_vs_human" && practiceState?.active ? (
+              <button
+                type="button"
+                onClick={onEndPractice}
+                disabled={isRunning}
+                className="rounded-md bg-red-700 px-4 py-2 text-sm font-semibold text-white hover:bg-red-800 disabled:cursor-not-allowed disabled:bg-zinc-400"
+              >
+                End Debate
+              </button>
+            ) : null}
+            <ProviderReadiness models={models} />
+          </div>
         </div>
       </section>
 
@@ -275,10 +317,14 @@ export function DebateRoom({
                 {messages.length === 0 && partialList.length === 0 ? (
                   <div className="mx-auto flex h-full max-w-2xl flex-col justify-center text-center">
                     <p className="text-2xl font-semibold text-zinc-950">
-                      Bring a question to the table.
+                      {selectedSession.mode === "ai_vs_human"
+                        ? "Start a practice debate."
+                        : "Bring a question to the table."}
                     </p>
                     <p className="mt-2 text-zinc-600">
-                      Ask normally, or request a debate when you want the council to argue.
+                      {selectedSession.mode === "ai_vs_human"
+                        ? "Choose your side when prompted, then spar with the Practice Debater."
+                        : "Ask normally, or request a debate when you want the council to argue."}
                     </p>
                   </div>
                 ) : (
@@ -297,6 +343,8 @@ export function DebateRoom({
               <Composer
                 models={models}
                 topic={topic}
+                sessionMode={selectedSession.mode}
+                practiceState={practiceState}
                 selectedModelName={selectedModelName}
                 isRunning={isRunning}
                 canSend={canSend}
@@ -338,6 +386,7 @@ export function DebateRoom({
               key={selectedSession?.id ?? "no-session"}
               session={selectedSession}
               settings={settings}
+              practiceState={practiceState}
               models={models}
               messages={messages}
               analytics={analytics}
@@ -411,6 +460,8 @@ function AssignmentStrip({ assignments }: { assignments: DebateAssignment[] }) {
 function Composer({
   models,
   topic,
+  sessionMode,
+  practiceState,
   selectedModelName,
   isRunning,
   canSend,
@@ -421,6 +472,8 @@ function Composer({
 }: {
   models: ModelsResponse | null;
   topic: string;
+  sessionMode: ChatSession["mode"];
+  practiceState: PracticeState | null;
   selectedModelName: string;
   isRunning: boolean;
   canSend: boolean;
@@ -442,6 +495,17 @@ function Composer({
     },
     {}
   );
+  const isPractice = sessionMode === "ai_vs_human";
+  const messageLabel = isPractice
+    ? practiceState?.active
+      ? "Your Turn To Input Debate Response"
+      : "Practice Topic Or Opening Argument"
+    : "Message";
+  const placeholder = isPractice
+    ? practiceState?.active
+      ? "Answer the Practice Debater, defend your side, or press a weakness."
+      : "Enter the topic or your opening argument for practice."
+    : "Say hello, ask a follow-up, or ask the council to debate a topic.";
 
   return (
     <section className="border-t border-zinc-300 bg-white p-4">
@@ -482,12 +546,14 @@ function Composer({
               </select>
             </div>
             <p className="text-sm leading-6 text-zinc-600">
-              The router decides whether this is a normal chat or a debate.
+              {isPractice
+                ? "Practice mode uses one AI opponent, then Judge and Trainer when the debate ends."
+                : "The router decides whether this is a normal chat or a debate."}
             </p>
           </div>
           <div>
             <label htmlFor="topic" className="mb-2 block text-sm font-medium text-zinc-900">
-              Message
+              {messageLabel}
             </label>
             <div className="flex flex-col gap-3 md:flex-row">
               <textarea
@@ -502,7 +568,7 @@ function Composer({
                     }
                   }
                 }}
-                placeholder="Say hello, ask a follow-up, or ask the council to debate a topic."
+                placeholder={placeholder}
                 rows={3}
                 className="min-h-24 flex-1 resize-none rounded-md border border-zinc-300 bg-white px-3 py-3 text-zinc-950 placeholder:text-zinc-500"
               />
@@ -512,7 +578,7 @@ function Composer({
                 disabled={!canSend}
                 className="h-12 rounded-md bg-emerald-700 px-5 py-3 font-semibold text-white transition hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-zinc-400 md:h-auto"
               >
-                {isRunning ? "Working" : "Send"}
+                {isRunning ? "Working" : isPractice ? "Send Response" : "Send"}
               </button>
             </div>
           </div>
@@ -1240,17 +1306,22 @@ function TeamRoomPanel({
 function CouncilSettingsPanel({
   settings,
   onChange,
-  onResetUniversalIdentities
+  onResetUniversalIdentities,
+  onResetUserDebateProfile
 }: {
   settings: CouncilSettings | null;
   onChange: (updates: Partial<CouncilSettings>) => void;
   onResetUniversalIdentities: (confirmation: string) => Promise<{ deleted: number }>;
+  onResetUserDebateProfile: (confirmation: string) => Promise<unknown>;
 }) {
   const [resetOpen, setResetOpen] = useState(false);
+  const [profileResetOpen, setProfileResetOpen] = useState(false);
   const [confirmation, setConfirmation] = useState("");
+  const [profileConfirmation, setProfileConfirmation] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
   const [resetError, setResetError] = useState<string | null>(null);
   const [isResetting, setIsResetting] = useState(false);
+  const [isProfileResetting, setIsProfileResetting] = useState(false);
 
   if (!settings) {
     return (
@@ -1276,6 +1347,22 @@ function CouncilSettingsPanel({
     }
   };
 
+  const handleProfileReset = async () => {
+    setResetError(null);
+    setNotice(null);
+    setIsProfileResetting(true);
+    try {
+      await onResetUserDebateProfile(profileConfirmation);
+      setNotice("User debate profile reset complete.");
+      setProfileConfirmation("");
+      setProfileResetOpen(false);
+    } catch (exc) {
+      setResetError(exc instanceof Error ? exc.message : "Could not reset user debate profile.");
+    } finally {
+      setIsProfileResetting(false);
+    }
+  };
+
   return (
     <section className="min-h-0 flex-1 overflow-y-auto p-4">
       <div className="mx-auto max-w-5xl space-y-4">
@@ -1291,10 +1378,56 @@ function CouncilSettingsPanel({
               value={settings.use_agent_identity_profiles}
               onChange={(value) => onChange({ use_agent_identity_profiles: value })}
             />
+            <ToggleSetting
+              label="Use User Debate Profile"
+              value={settings.use_user_debate_profile}
+              onChange={(value) => onChange({ use_user_debate_profile: value })}
+            />
           </div>
           <p className="mt-3 text-sm text-zinc-600">
             Universal experience lets agent identities use factual records from all chats. Identity profiles stay empty until real debate records exist.
           </p>
+        </Panel>
+
+        <Panel title="Confirmation messages">
+          <div className="grid gap-3 md:grid-cols-3">
+            <ToggleSetting
+              label="Skip Delete Chat Confirmation"
+              value={settings.confirmation_preferences.delete_chat}
+              onChange={(value) =>
+                onChange({
+                  confirmation_preferences: {
+                    ...settings.confirmation_preferences,
+                    delete_chat: value
+                  }
+                })
+              }
+            />
+            <ToggleSetting
+              label="Skip Clear History Confirmation"
+              value={settings.confirmation_preferences.clear_chat_history}
+              onChange={(value) =>
+                onChange({
+                  confirmation_preferences: {
+                    ...settings.confirmation_preferences,
+                    clear_chat_history: value
+                  }
+                })
+              }
+            />
+            <ToggleSetting
+              label="Skip Clear Memory Confirmation"
+              value={settings.confirmation_preferences.clear_chat_memory}
+              onChange={(value) =>
+                onChange({
+                  confirmation_preferences: {
+                    ...settings.confirmation_preferences,
+                    clear_chat_memory: value
+                  }
+                })
+              }
+            />
+          </div>
         </Panel>
 
         <Panel title="Debate intelligence defaults">
@@ -1379,6 +1512,60 @@ function CouncilSettingsPanel({
             </div>
           )}
           {notice ? <p className="mt-3 text-sm text-emerald-700">{notice}</p> : null}
+        </Panel>
+
+        <Panel title="Reset user debate profile">
+          <p className="text-sm text-zinc-600">
+            This resets the human practice profile used by Practice Debater and Debate Trainer.
+            It does not delete chats or AI agent identities.
+          </p>
+          {!profileResetOpen ? (
+            <button
+              type="button"
+              onClick={() => {
+                setProfileResetOpen(true);
+                setNotice(null);
+                setResetError(null);
+              }}
+              className="mt-3 rounded-md border border-red-300 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-50"
+            >
+              Reset User Debate Profile
+            </button>
+          ) : (
+            <div className="mt-3 rounded-md border border-red-200 bg-red-50 p-3">
+              <p className="text-sm font-semibold text-red-900">
+                Type RESET USER DEBATE PROFILE to confirm.
+              </p>
+              <input
+                value={profileConfirmation}
+                onChange={(event) => setProfileConfirmation(event.target.value)}
+                className="mt-2 h-10 w-full rounded-md border border-red-300 bg-white px-3 text-sm"
+                placeholder="RESET USER DEBATE PROFILE"
+              />
+              {resetError ? <p className="mt-2 text-sm text-red-800">{resetError}</p> : null}
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={handleProfileReset}
+                  disabled={isProfileResetting || profileConfirmation !== "RESET USER DEBATE PROFILE"}
+                  className="rounded-md bg-red-700 px-4 py-2 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:bg-zinc-400"
+                >
+                  {isProfileResetting ? "Resetting..." : "Confirm Reset"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProfileResetOpen(false);
+                    setProfileConfirmation("");
+                    setResetError(null);
+                  }}
+                  className="rounded-md border border-zinc-300 px-4 py-2 text-sm font-semibold text-zinc-800 hover:bg-zinc-100"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
         </Panel>
       </div>
     </section>
@@ -1588,6 +1775,7 @@ function formatAgentLabel(value: string) {
 function SettingsPanel({
   session,
   settings,
+  practiceState,
   models,
   messages,
   analytics,
@@ -1607,6 +1795,7 @@ function SettingsPanel({
 }: {
   session: ChatSession | null;
   settings: SessionSettings | null;
+  practiceState: PracticeState | null;
   models: ModelsResponse | null;
   messages: DebateMessage[];
   analytics: DebateAnalytics | null;
@@ -1823,6 +2012,115 @@ function SettingsPanel({
           )}
         </Panel>
 
+        {session.mode === "ai_vs_human" ? (
+          <Panel title="Practice Training">
+            <div className="grid gap-3 md:grid-cols-3">
+              <SelectSetting
+                label="Human side default"
+                value={settings.practice_settings.human_side}
+                options={["Auto", "Pro", "Con"]}
+                onChange={(value) =>
+                  onSettingsChange({
+                    practice_settings: {
+                      ...settings.practice_settings,
+                      human_side: value as SessionSettings["practice_settings"]["human_side"]
+                    }
+                  })
+                }
+              />
+              <SelectSetting
+                label="Practice flow"
+                value={settings.practice_settings.practice_flow}
+                options={["Free", "Structured"]}
+                onChange={(value) =>
+                  onSettingsChange({
+                    practice_settings: {
+                      ...settings.practice_settings,
+                      practice_flow: value as SessionSettings["practice_settings"]["practice_flow"]
+                    }
+                  })
+                }
+              />
+              {settings.practice_settings.practice_flow === "Structured" ? (
+                <NumberSetting
+                  label="Structured rounds"
+                  value={settings.practice_settings.structured_rounds}
+                  min={1}
+                  max={12}
+                  onChange={(value) =>
+                    onSettingsChange({
+                      practice_settings: {
+                        ...settings.practice_settings,
+                        structured_rounds: value
+                      }
+                    })
+                  }
+                />
+              ) : null}
+              <SelectSetting
+                label="Opponent difficulty"
+                value={settings.practice_settings.opponent_difficulty}
+                options={["Adaptive", "Beginner", "Normal", "Hard"]}
+                onChange={(value) =>
+                  onSettingsChange({
+                    practice_settings: {
+                      ...settings.practice_settings,
+                      opponent_difficulty: value as SessionSettings["practice_settings"]["opponent_difficulty"]
+                    }
+                  })
+                }
+              />
+              <SelectSetting
+                label="Training focus"
+                value={settings.practice_settings.training_focus}
+                options={["Full Debate", "Rebuttal", "Evidence", "Clarity", "Cross-Examination"]}
+                onChange={(value) =>
+                  onSettingsChange({
+                    practice_settings: {
+                      ...settings.practice_settings,
+                      training_focus: value as SessionSettings["practice_settings"]["training_focus"]
+                    }
+                  })
+                }
+              />
+              <SelectSetting
+                label="Trainer style"
+                value={settings.practice_settings.trainer_style}
+                options={["Coach", "Direct", "Gentle", "Examiner"]}
+                onChange={(value) =>
+                  onSettingsChange({
+                    practice_settings: {
+                      ...settings.practice_settings,
+                      trainer_style: value as SessionSettings["practice_settings"]["trainer_style"]
+                    }
+                  })
+                }
+              />
+              <ToggleSetting
+                label="Use User Debate Profile"
+                value={settings.practice_settings.use_user_profile}
+                onChange={(value) =>
+                  onSettingsChange({
+                    practice_settings: {
+                      ...settings.practice_settings,
+                      use_user_profile: value
+                    }
+                  })
+                }
+              />
+            </div>
+            {practiceState?.active ? (
+              <p className="mt-3 rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
+                Current practice debate: you are {(practiceState.human_side || "").toUpperCase()}.
+                {practiceState.practice_flow === "Structured"
+                  ? ` ${practiceState.rounds_left ?? 0} round(s) left.`
+                  : " Free debate is active."}
+              </p>
+            ) : null}
+          </Panel>
+        ) : null}
+
+        {session.mode !== "ai_vs_human" ? (
         <Panel title="Debating Flow">
           <div className="grid gap-3 md:grid-cols-2">
             <SelectSetting
@@ -1856,7 +2154,9 @@ function SettingsPanel({
             </p>
           </div>
         </Panel>
+        ) : null}
 
+        {session.mode !== "ai_vs_human" ? (
         <Panel title="Debaters & Teams">
           <div className="grid gap-3 md:grid-cols-2">
             <ToggleSetting
@@ -1930,6 +2230,45 @@ function SettingsPanel({
             </div>
           </div>
         </Panel>
+        ) : (
+          <Panel title="Practice Agents">
+            <p className="mb-3 text-sm text-zinc-600">
+              Practice Debater argues against you. Judge and Judge Assistant evaluate the debate, then Debate Trainer coaches you.
+            </p>
+            <div className="divide-y divide-zinc-200 border-y border-zinc-200">
+              <AgentSettingsRow
+                roleKey="practice_debater"
+                label="Practice Debater"
+                description="The AI opponent in Human Debate Training."
+                settings={settings}
+                unlockedModels={unlockedModels}
+                selectedModelName={selectedModelName}
+                onChange={updateAgentSetting}
+              />
+              <AgentSettingsRow
+                roleKey="debate_trainer"
+                label="Debate Trainer"
+                description="The coach that reviews the debate after Judge gives a verdict."
+                settings={settings}
+                unlockedModels={unlockedModels}
+                selectedModelName={selectedModelName}
+                onChange={updateAgentSetting}
+              />
+              {visibleNeutralRoles.map((role) => (
+                <AgentSettingsRow
+                  key={role.key}
+                  roleKey={role.key}
+                  label={role.label}
+                  description={role.description}
+                  settings={settings}
+                  unlockedModels={unlockedModels}
+                  selectedModelName={selectedModelName}
+                  onChange={updateAgentSetting}
+                />
+              ))}
+            </div>
+          </Panel>
+        )}
 
         <Panel title="Council Assistant">
           <p className="mb-3 text-sm text-zinc-600">
@@ -2396,7 +2735,15 @@ function LineChart({ history }: { history: DebateAnalytics[] }) {
   const latest = history[history.length - 1];
   const plotWidth = width - padLeft - padRight;
   const plotHeight = height - padTop - padBottom;
-  const xTicks = history.map((_, index) => index + 1);
+  const tickStep = Math.max(1, Math.ceil(history.length / 8));
+  const xTicks = history
+    .map((_, index) => index)
+    .filter(
+      (index) =>
+        index === 0 ||
+        index === history.length - 1 ||
+        (index + 1) % tickStep === 0
+    );
 
   const pathFor = (label: (typeof labels)[number]) =>
     history
@@ -2438,7 +2785,8 @@ function LineChart({ history }: { history: DebateAnalytics[] }) {
             </text>
           </g>
         ))}
-        {xTicks.map((tick, index) => {
+        {xTicks.map((index) => {
+          const tick = index + 1;
           const x = padLeft + (index / Math.max(1, history.length - 1)) * plotWidth;
           return (
             <g key={tick}>

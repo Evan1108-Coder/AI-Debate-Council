@@ -6,7 +6,9 @@ import type {
   DebateMessage,
   DebateRecord,
   ModelsResponse,
-  SessionSettings
+  PracticeState,
+  SessionSettings,
+  UserDebateProfile
 } from "@/types";
 
 export const API_BASE =
@@ -78,6 +80,17 @@ export function updateCouncilSettings(updates: Partial<CouncilSettings>) {
   });
 }
 
+export function getUserDebateProfile() {
+  return request<UserDebateProfile>("/api/user-debate-profile");
+}
+
+export function resetUserDebateProfile(confirmation: string) {
+  return request<UserDebateProfile>("/api/user-debate-profile/reset", {
+    method: "POST",
+    body: JSON.stringify({ confirmation })
+  });
+}
+
 export function resetUniversalAgentExperience(confirmation: string) {
   return request<{ deleted: number }>("/api/council-settings/reset-agent-experience", {
     method: "POST",
@@ -89,8 +102,14 @@ export function listSessions() {
   return request<ChatSession[]>("/api/sessions");
 }
 
-export function createSession() {
-  return request<ChatSession>("/api/sessions", { method: "POST" });
+export function createSession(payload?: {
+  mode?: ChatSession["mode"];
+  settings?: Partial<SessionSettings>;
+}) {
+  return request<ChatSession>("/api/sessions", {
+    method: "POST",
+    body: payload ? JSON.stringify(payload) : undefined
+  });
 }
 
 export function renameSession(sessionId: string, name: string) {
@@ -137,6 +156,10 @@ export function deleteDebateStatistics(sessionId: string, debateId: string) {
 
 export function getSessionSettings(sessionId: string) {
   return request<SessionSettings>(`/api/sessions/${sessionId}/settings`);
+}
+
+export function getPracticeState(sessionId: string) {
+  return request<PracticeState>(`/api/sessions/${sessionId}/practice-state`);
 }
 
 export function updateSessionSettings(sessionId: string, updates: Partial<SessionSettings>) {

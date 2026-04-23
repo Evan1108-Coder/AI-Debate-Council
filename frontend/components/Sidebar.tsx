@@ -24,6 +24,8 @@ export function Sidebar({
   councilSettingsActive
 }: SidebarProps) {
   const limitReached = sessions.length >= maxSessions;
+  const aiSessions = sessions.filter((session) => session.mode !== "ai_vs_human");
+  const practiceSessions = sessions.filter((session) => session.mode === "ai_vs_human");
 
   return (
     <aside className="flex h-full w-full flex-col border-r border-zinc-300 bg-white md:w-80">
@@ -69,28 +71,18 @@ export function Sidebar({
           <p className="px-2 py-3 text-sm text-zinc-600">Create a session to begin.</p>
         ) : null}
 
-        <div className="space-y-2">
-          {sessions.map((session) => {
-            const selected = selectedId === session.id;
-            return (
-              <div
-                key={session.id}
-                className={`rounded-md border p-2 ${
-                  selected ? "border-zinc-950 bg-zinc-100" : "border-zinc-300 bg-white"
-                }`}
-              >
-                <button
-                  type="button"
-                  onClick={() => onSelect(session.id)}
-                  className="block w-full truncate rounded px-2 py-2 text-left text-sm font-medium text-zinc-950 hover:bg-zinc-100"
-                  title={session.name}
-                >
-                  {session.name}
-                </button>
-              </div>
-            );
-          })}
-        </div>
+        <SessionGroup
+          title="AI vs AI"
+          sessions={aiSessions}
+          selectedId={selectedId}
+          onSelect={onSelect}
+        />
+        <SessionGroup
+          title="AI vs Human"
+          sessions={practiceSessions}
+          selectedId={selectedId}
+          onSelect={onSelect}
+        />
       </nav>
 
       <div className="border-t border-zinc-300 p-3">
@@ -110,5 +102,48 @@ export function Sidebar({
         </button>
       </div>
     </aside>
+  );
+}
+
+function SessionGroup({
+  title,
+  sessions,
+  selectedId,
+  onSelect
+}: {
+  title: string;
+  sessions: ChatSession[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  if (sessions.length === 0) {
+    return null;
+  }
+  return (
+    <div className="mb-4">
+      <p className="mb-2 px-2 text-xs font-semibold uppercase text-zinc-500">{title}</p>
+      <div className="space-y-2">
+        {sessions.map((session) => {
+          const selected = selectedId === session.id;
+          return (
+            <div
+              key={session.id}
+              className={`rounded-md border p-2 ${
+                selected ? "border-zinc-950 bg-zinc-100" : "border-zinc-300 bg-white"
+              }`}
+            >
+              <button
+                type="button"
+                onClick={() => onSelect(session.id)}
+                className="block w-full truncate rounded px-2 py-2 text-left text-sm font-medium text-zinc-950 hover:bg-zinc-100"
+                title={session.name}
+              >
+                {session.name}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }

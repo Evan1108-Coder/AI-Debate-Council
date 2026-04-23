@@ -1,9 +1,48 @@
 export type ChatSession = {
   id: string;
   name: string;
+  mode: "ai_vs_ai" | "ai_vs_human";
   default_index: number;
   created_at: string;
   updated_at: string;
+};
+
+export type PracticeSettings = {
+  human_side: "Auto" | "Pro" | "Con";
+  practice_flow: "Free" | "Structured";
+  structured_rounds: number;
+  use_user_profile: boolean;
+  trainer_style: "Coach" | "Direct" | "Gentle" | "Examiner";
+  training_focus: "Full Debate" | "Rebuttal" | "Evidence" | "Clarity" | "Cross-Examination";
+  opponent_difficulty: "Adaptive" | "Beginner" | "Normal" | "Hard";
+};
+
+export type UserDebateProfile = {
+  version: number;
+  debates_completed: number;
+  practice_debates_completed: number;
+  wins: Record<"pro" | "con" | "unclear", number>;
+  side_history: Record<"pro" | "con" | "auto", number>;
+  strengths: string[];
+  weaknesses: string[];
+  trainer_notes: string[];
+  style_tags: string[];
+  last_updated_at: string;
+};
+
+export type PracticeState = {
+  active: boolean;
+  debate_id?: string;
+  topic?: string;
+  human_side?: string;
+  ai_side?: string;
+  side_source?: string;
+  side_reason?: string;
+  practice_flow?: "Free" | "Structured";
+  structured_rounds?: number;
+  human_turns?: number;
+  rounds_left?: number | null;
+  ending?: boolean;
 };
 
 export type DebateMessage = {
@@ -28,9 +67,14 @@ export type DebateMessage = {
 export type CouncilSettings = {
   universal_experience: boolean;
   use_agent_identity_profiles: boolean;
+  use_user_debate_profile: boolean;
   debate_intelligence_depth: "Light" | "Normal" | "Deep";
   use_value_consequence_system: boolean;
   default_judge_mode: "Debate Performance" | "Truth-Seeking" | "Hybrid";
+  confirmation_preferences: Record<
+    "delete_chat" | "clear_chat_history" | "clear_chat_memory",
+    boolean
+  >;
 };
 
 export type DebateIntelligenceRecord = {
@@ -118,6 +162,7 @@ export type SessionSettings = {
   use_experience: boolean;
   judge_mode: string;
   evidence_strictness: string;
+  practice_settings: PracticeSettings;
   updated_at?: string;
 };
 
@@ -197,6 +242,7 @@ export type DebateRecord = {
   status: string;
   judge_summary: string | null;
   error: string | null;
+  metadata?: Record<string, unknown> | null;
   started_at: string;
   finished_at: string | null;
 };
@@ -342,9 +388,25 @@ export type DebateEvent =
     }
   | {
       type: "interaction_started";
-      mode: "chat";
+      mode: "chat" | "practice";
       debate: { id: string; topic: string };
       selected_model: SupportedModel;
+    }
+  | {
+      type: "practice_started";
+      debate: DebateRecord;
+      state: PracticeState;
+      selected_model: SupportedModel;
+    }
+  | {
+      type: "practice_state_updated";
+      state: PracticeState;
+    }
+  | {
+      type: "practice_completed";
+      debate_id: string;
+      profile: UserDebateProfile;
+      cost_summary?: CostSummary;
     }
   | {
       type: "team_preparation_started" | "team_preparation_completed";
@@ -386,7 +448,7 @@ export type DebateEvent =
     }
   | {
       type: "interaction_completed";
-      mode: "chat";
+      mode: "chat" | "practice";
       debate_id: string;
       cost_summary?: CostSummary;
     }

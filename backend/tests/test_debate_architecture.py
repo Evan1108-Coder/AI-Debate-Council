@@ -355,6 +355,19 @@ class DebateArchitectureTests(unittest.TestCase):
 
         self.assertTrue(summary.startswith("WINNER: Pro\nReason:"))
 
+    def test_judge_summary_detects_comparative_winner_sentence(self) -> None:
+        pro_summary = self.manager._normalize_judge_summary(
+            "The Pro team edges out the Con team because it answered the core burden.",
+            "Should cities ban private cars downtown?",
+        )
+        con_summary = self.manager._normalize_judge_summary(
+            "The Con case is more persuasive than the Pro case on feasibility.",
+            "Should cities ban private cars downtown?",
+        )
+
+        self.assertTrue(pro_summary.startswith("WINNER: Pro\nReason:"))
+        self.assertTrue(con_summary.startswith("WINNER: Con\nReason:"))
+
     def test_mock_stream_treats_closed_websocket_as_client_disconnect(self) -> None:
         class ClosedSocket:
             async def send_json(self, payload: dict) -> None:

@@ -17,12 +17,14 @@ from .runtime_diary import runtime_diary
 from .schemas import (
     ChatSession,
     CouncilSettingsUpdate,
+    CreateSessionRequest,
     DebateMessage,
     DebateRecord,
     FeedbackRequest,
     RenameDebateRequest,
     RenameSessionRequest,
     ResetAgentExperienceRequest,
+    ResetUserDebateProfileRequest,
     SessionSettingsUpdate,
 )
 
@@ -184,6 +186,22 @@ def reset_universal_agent_experience(payload: ResetAgentExperienceRequest) -> di
     return {"deleted": deleted}
 
 
+@app.get("/api/user-debate-profile")
+def get_user_debate_profile() -> dict:
+    return db.get_user_debate_profile()
+
+
+@app.post("/api/user-debate-profile/reset")
+def reset_user_debate_profile(payload: ResetUserDebateProfileRequest) -> dict:
+    phrase = payload.confirmation.strip()
+    if phrase != "RESET USER DEBATE PROFILE":
+        raise HTTPException(
+            status_code=422,
+            detail='Type RESET USER DEBATE PROFILE to reset the user debate profile.',
+        )
+    return db.reset_user_debate_profile()
+
+
 @app.post("/api/runtime-diary")
 def record_runtime_diary(payload: dict) -> dict:
     source = str(payload.get("source") or "frontend/browser")
@@ -200,9 +218,14 @@ def list_sessions() -> list[dict]:
 
 
 @app.post("/api/sessions", response_model=ChatSession, status_code=201)
-def create_session() -> dict:
+def create_session(payload: CreateSessionRequest | None = None) -> dict:
     try:
-        return db.create_session(settings.max_sessions)
+        body = payload or CreateSessionRequest()
+        return db.create_session(
+            settings.max_sessions,
+            mode=body.mode,
+            settings_updates=body.settings or None,
+        )
     except ValueError as exc:
         if str(exc) == "SESSION_LIMIT":
             raise HTTPException(
@@ -284,6 +307,13 @@ def get_settings(session_id: str) -> dict:
     if not session_settings:
         raise HTTPException(status_code=404, detail="Session not found.")
     return session_settings
+
+
+@app.get("/api/sessions/{session_id}/practice-state")
+def get_practice_state(session_id: str) -> dict:
+    if not db.get_session(session_id):
+        raise HTTPException(status_code=404, detail="Session not found.")
+    return debate_manager.practice_state(session_id)
 
 
 @app.patch("/api/sessions/{session_id}/settings")
@@ -472,7 +502,7 @@ async def debate_socket(websocket: WebSocket, session_id: str):
     try:
         while True:
             payload = await websocket.receive_json()
-            if payload.get("type") not in {"start_debate", "start_interaction"}:
+            if payload.get("type") not in {"start_debate", "start_interaction", "end_practice_debate"}:
                 if not await safe_send_json(
                     websocket,
                     {"type": "error", "message": "Unknown WebSocket event type."}
@@ -483,7 +513,16 @@ async def debate_socket(websocket: WebSocket, session_id: str):
             topic = str(payload.get("topic", "")).strip()
             selected_model = str(payload.get("model", "")).strip()
             try:
-                await debate_manager.run_interaction(websocket, session_id, topic, selected_model)
+                if payload.get("type") == "end_practice_debate":
+                    await debate_manager.end_practice_debate(websocket, session_id, selected_model)
+                else:
+                    await debate_manager.run_interaction(
+                        websocket,
+                        session_id,
+                        topic,
+                        selected_model,
+                        practice_side=str(payload.get("practice_side", "")).strip() or None,
+                    )
             except ClientDisconnectedError:
                 return
             except DebateError as exc:

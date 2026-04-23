@@ -13,6 +13,7 @@ import {
   deleteSession,
   getCouncilSettings,
   getModels,
+  getPracticeState,
   getSessionAnalytics,
   getSessionIntelligence,
   getSessionSettings,
@@ -22,6 +23,7 @@ import {
   recordRuntimeDiary,
   renameDebate,
   resetUniversalAgentExperience,
+  resetUserDebateProfile,
   renameSession,
   submitDebateFeedback,
   updateCouncilSettings,
@@ -38,6 +40,8 @@ import type {
   DebateMessage,
   DebateRecord,
   ModelsResponse,
+  PracticeSettings,
+  PracticeState,
   SessionSettings
 } from "@/types";
 
@@ -45,8 +49,23 @@ const MAX_SESSIONS = 10;
 const USER_INPUT_MAX_CHARS = 5500;
 const WEBSOCKET_CONNECT_RETRIES = 2;
 const WEBSOCKET_RETRY_DELAY_MS = 1200;
+const DEFAULT_PRACTICE_SETTINGS: PracticeSettings = {
+  human_side: "Auto",
+  practice_flow: "Free",
+  structured_rounds: 3,
+  use_user_profile: true,
+  trainer_style: "Coach",
+  training_focus: "Full Debate",
+  opponent_difficulty: "Adaptive"
+};
 type ClearTarget = { session: ChatSession; mode: "history" | "memory" };
 type DebateDeleteTarget = { session: ChatSession; debate: DebateRecord };
+type NewChatDraft = {
+  mode: ChatSession["mode"];
+  overall_model: string;
+  debaters_per_team: number;
+  practice_settings: PracticeSettings;
+};
 
 export default function Home() {
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -68,6 +87,7 @@ export default function Home() {
   );
   const [analyticsBySession, setAnalyticsBySession] = useState<Record<string, DebateAnalytics>>({});
   const [intelligenceBySession, setIntelligenceBySession] = useState<Record<string, DebateIntelligence>>({});
+  const [practiceStateBySession, setPracticeStateBySession] = useState<Record<string, PracticeState>>({});
   const [analyticsHistoryBySession, setAnalyticsHistoryBySession] = useState<
     Record<string, DebateAnalytics[]>
   >({});
@@ -76,6 +96,22 @@ export default function Home() {
   const [models, setModels] = useState<ModelsResponse | null>(null);
   const [councilSettings, setCouncilSettings] = useState<CouncilSettings | null>(null);
   const [showCouncilSettings, setShowCouncilSettings] = useState(false);
+  const [newChatOpen, setNewChatOpen] = useState(false);
+  const [newChatTab, setNewChatTab] = useState<"mode" | "settings">("mode");
+  const [newChatDraft, setNewChatDraft] = useState<NewChatDraft>({
+    mode: "ai_vs_ai",
+    overall_model: "",
+    debaters_per_team: 2,
+    practice_settings: DEFAULT_PRACTICE_SETTINGS
+  });
+  const [creatingSession, setCreatingSession] = useState(false);
+  const [practiceStartTarget, setPracticeStartTarget] = useState<{
+    sessionId: string;
+    content: string;
+    modelName: string;
+  } | null>(null);
+  const [practiceSideChoice, setPracticeSideChoice] = useState<"Auto" | "Pro" | "Con">("Auto");
+  const [endingPracticeSessionId, setEndingPracticeSessionId] = useState<string | null>(null);
   const [activePanel, setActivePanel] = useState<RoomPanel>("chat");
   const [error, setError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ChatSession | null>(null);
@@ -112,6 +148,7 @@ export default function Home() {
   const selectedDebateId = selectedId ? selectedDebateBySession[selectedId] ?? "" : "";
   const selectedAnalytics = selectedId ? analyticsBySession[selectedId] ?? null : null;
   const selectedIntelligence = selectedId ? intelligenceBySession[selectedId] ?? null : null;
+  const selectedPracticeState = selectedId ? practiceStateBySession[selectedId] ?? null : null;
   const selectedAnalyticsHistory = selectedId ? analyticsHistoryBySession[selectedId] ?? [] : [];
   const selectedRunning = selectedId ? Boolean(runningBySession[selectedId]) : false;
   const selectedTeamPreparing = selectedId ? Boolean(teamPreparingBySession[selectedId]) : false;
@@ -183,6 +220,12 @@ export default function Home() {
     setIntelligenceBySession((current) => ({ ...current, [sessionId]: nextIntelligence }));
   }, []);
 
+  const refreshPracticeState = useCallback(async (sessionId: string) => {
+    const nextPracticeState = await getPracticeState(sessionId);
+    setPracticeStateBySession((current) => ({ ...current, [sessionId]: nextPracticeState }));
+    return nextPracticeState;
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -241,7 +284,8 @@ export default function Home() {
     refreshDebates(selectedId).catch(() => undefined);
     refreshAnalytics(selectedId).catch(() => undefined);
     refreshIntelligence(selectedId).catch(() => undefined);
-  }, [selectedId, refreshMessages, refreshSettings, refreshDebates, refreshAnalytics, refreshIntelligence]);
+    refreshPracticeState(selectedId).catch(() => undefined);
+  }, [selectedId, refreshMessages, refreshSettings, refreshDebates, refreshAnalytics, refreshIntelligence, refreshPracticeState]);
 
   useEffect(() => {
     if (!models || !selectedId) {
@@ -258,15 +302,38 @@ export default function Home() {
   }, [models, selectedId, settingsBySession]);
 
   async function handleNewSession() {
+    setNewChatDraft((current) => ({
+      ...current,
+      overall_model: current.overall_model || models?.models[0]?.name || ""
+    }));
+    setNewChatTab("mode");
+    setNewChatOpen(true);
+  }
+
+  async function handleCreateSessionFromDraft() {
+    if (creatingSession) {
+      return;
+    }
     setError(null);
+    setCreatingSession(true);
     try {
-      const created = await createSession();
+      const settings: Partial<SessionSettings> = {
+        overall_model: newChatDraft.overall_model,
+        debaters_per_team: newChatDraft.debaters_per_team,
+        practice_settings: newChatDraft.practice_settings
+      };
+      const created = await createSession({ mode: newChatDraft.mode, settings });
       setSessions((current) => [created, ...current]);
       setSelectedId(created.id);
       setStatusBySession((current) => ({ ...current, [created.id]: "Ready for a message." }));
+      setPracticeStateBySession((current) => ({ ...current, [created.id]: { active: false } }));
       setActivePanel("chat");
+      setShowCouncilSettings(false);
+      setNewChatOpen(false);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : "Could not create session.");
+    } finally {
+      setCreatingSession(false);
     }
   }
 
@@ -309,17 +376,29 @@ export default function Home() {
     }
   }
 
-  async function handleConfirmDelete() {
-    if (!deleteTarget || deletingSessionId) {
+  async function handleConfirmDelete(targetOverride?: ChatSession, suppressFuture = false) {
+    const target = targetOverride ?? deleteTarget;
+    if (!target || deletingSessionId) {
       return;
     }
 
-    const target = deleteTarget;
     setDeletingSessionId(target.id);
     setDeleteError(null);
     setError(null);
 
     try {
+      if (suppressFuture) {
+        await handleUpdateCouncilSettings({
+          confirmation_preferences: {
+            ...(councilSettings?.confirmation_preferences ?? {
+              delete_chat: false,
+              clear_chat_history: false,
+              clear_chat_memory: false
+            }),
+            delete_chat: true
+          }
+        });
+      }
       await deleteSession(target.id);
       clearSocketRetry(target.id);
       socketRefs.current[target.id]?.close();
@@ -337,6 +416,7 @@ export default function Home() {
       setAnalyticsBySession((current) => removeKey(current, target.id));
       setAnalyticsHistoryBySession((current) => removeKey(current, target.id));
       setIntelligenceBySession((current) => removeKey(current, target.id));
+      setPracticeStateBySession((current) => removeKey(current, target.id));
       setRunningBySession((current) => removeKey(current, target.id));
       setTeamPreparingBySession((current) => removeKey(current, target.id));
       if (selectedId === target.id) {
@@ -380,6 +460,7 @@ export default function Home() {
       setSelectedDebateBySession({});
       setAnalyticsBySession({});
       setIntelligenceBySession({});
+      setPracticeStateBySession({});
       setAnalyticsHistoryBySession({});
       setRunningBySession({});
       setTeamPreparingBySession({});
@@ -394,17 +475,30 @@ export default function Home() {
     }
   }
 
-  async function handleConfirmClear() {
-    if (!clearTarget || clearingSessionId) {
+  async function handleConfirmClear(targetOverride?: ClearTarget, suppressFuture = false) {
+    const target = targetOverride ?? clearTarget;
+    if (!target || clearingSessionId) {
       return;
     }
 
-    const { session, mode } = clearTarget;
+    const { session, mode } = target;
     setClearingSessionId(session.id);
     setClearError(null);
     setError(null);
 
     try {
+      if (suppressFuture) {
+        await handleUpdateCouncilSettings({
+          confirmation_preferences: {
+            ...(councilSettings?.confirmation_preferences ?? {
+              delete_chat: false,
+              clear_chat_history: false,
+              clear_chat_memory: false
+            }),
+            [mode === "history" ? "clear_chat_history" : "clear_chat_memory"]: true
+          }
+        });
+      }
       if (mode === "history") {
         await clearSessionHistory(session.id);
       } else {
@@ -418,6 +512,7 @@ export default function Home() {
       setAnalyticsBySession((current) => removeKey(current, session.id));
       setAnalyticsHistoryBySession((current) => ({ ...current, [session.id]: [] }));
       setIntelligenceBySession((current) => removeKey(current, session.id));
+      setPracticeStateBySession((current) => ({ ...current, [session.id]: { active: false } }));
       setStatusBySession((current) => ({
         ...current,
         [session.id]:
@@ -559,6 +654,14 @@ export default function Home() {
     return result;
   }
 
+  async function handleResetUserDebateProfile(confirmation: string) {
+    const result = await resetUserDebateProfile(confirmation);
+    if (selectedId) {
+      await refreshPracticeState(selectedId);
+    }
+    return result;
+  }
+
   async function handleSubmitFeedback(questionKey: string, answer: string) {
     if (!selectedId) {
       return;
@@ -598,7 +701,8 @@ export default function Home() {
     sessionId: string,
     content: string,
     modelName: string,
-    attempt: number
+    attempt: number,
+    options: { eventType?: "start_interaction" | "end_practice_debate"; practiceSide?: string } = {}
   ) {
     clearSocketRetry(sessionId);
     let serverStarted = false;
@@ -608,7 +712,14 @@ export default function Home() {
     socketRefs.current[sessionId] = websocket;
 
     websocket.onopen = () => {
-      websocket.send(JSON.stringify({ type: "start_interaction", topic: content, model: modelName }));
+      websocket.send(
+        JSON.stringify({
+          type: options.eventType ?? "start_interaction",
+          topic: content,
+          model: modelName,
+          practice_side: options.practiceSide
+        })
+      );
       sentStart = true;
       recordRuntimeDiary("websocket opened", `Started interaction with ${modelName}.`, sessionId);
       setDraftBySession((current) => ({ ...current, [sessionId]: "" }));
@@ -671,11 +782,12 @@ export default function Home() {
         }));
         retryTimerRefs.current[sessionId] = setTimeout(() => {
           const retryModelName = modelBySessionRef.current[sessionId] || modelName;
-          openInteractionSocket(sessionId, content, retryModelName, attempt + 1);
+          openInteractionSocket(sessionId, content, retryModelName, attempt + 1, options);
         }, WEBSOCKET_RETRY_DELAY_MS);
         return;
       }
       setRunningBySession((current) => ({ ...current, [sessionId]: false }));
+      setEndingPracticeSessionId(null);
       setPartialBySession((current) => ({ ...current, [sessionId]: {} }));
       setStatusBySession((current) => ({
         ...current,
@@ -714,12 +826,46 @@ export default function Home() {
     }
 
     const sessionId = selectedId;
+    if (selectedSession.mode === "ai_vs_human" && !selectedPracticeState?.active) {
+      const defaultSide = selectedSettings?.practice_settings?.human_side ?? "Auto";
+      setPracticeSideChoice(defaultSide);
+      setPracticeStartTarget({ sessionId, content, modelName });
+      return;
+    }
     setError(null);
     setStatusBySession((current) => ({ ...current, [sessionId]: "Connecting the council..." }));
     setPartialBySession((current) => ({ ...current, [sessionId]: {} }));
     setAssignmentsBySession((current) => ({ ...current, [sessionId]: [] }));
     setRunningBySession((current) => ({ ...current, [sessionId]: true }));
     openInteractionSocket(sessionId, content, modelName, 0);
+  }
+
+  function startPracticeFromDialog() {
+    if (!practiceStartTarget) {
+      return;
+    }
+    const { sessionId, content, modelName } = practiceStartTarget;
+    setPracticeStartTarget(null);
+    setError(null);
+    setStatusBySession((current) => ({ ...current, [sessionId]: "Starting practice debate..." }));
+    setPartialBySession((current) => ({ ...current, [sessionId]: {} }));
+    setAssignmentsBySession((current) => ({ ...current, [sessionId]: [] }));
+    setRunningBySession((current) => ({ ...current, [sessionId]: true }));
+    openInteractionSocket(sessionId, content, modelName, 0, { practiceSide: practiceSideChoice });
+  }
+
+  function handleEndPracticeDebate() {
+    if (!selectedId || !selectedModelName || runningBySession[selectedId]) {
+      return;
+    }
+    const sessionId = selectedId;
+    setEndingPracticeSessionId(sessionId);
+    setError(null);
+    setStatusBySession((current) => ({ ...current, [sessionId]: "Ending practice debate..." }));
+    setRunningBySession((current) => ({ ...current, [sessionId]: true }));
+    openInteractionSocket(sessionId, "", selectedModelName, 0, {
+      eventType: "end_practice_debate"
+    });
   }
 
   function handleDebateEvent(sessionId: string, event: DebateEvent) {
@@ -742,6 +888,32 @@ export default function Home() {
       return;
     }
 
+    if (event.type === "practice_started") {
+      setPracticeStateBySession((current) => ({ ...current, [sessionId]: event.state }));
+      setDebatesBySession((current) => {
+        const currentDebates = current[sessionId] ?? [];
+        const withoutCurrent = currentDebates.filter((debate) => debate.id !== event.debate.id);
+        return { ...current, [sessionId]: [event.debate, ...withoutCurrent] };
+      });
+      setSelectedDebateBySession((current) => ({ ...current, [sessionId]: event.debate.id }));
+      setStatusBySession((current) => ({
+        ...current,
+        [sessionId]: event.state.side_reason || "Practice debate started."
+      }));
+      return;
+    }
+
+    if (event.type === "practice_state_updated") {
+      setPracticeStateBySession((current) => ({ ...current, [sessionId]: event.state }));
+      if (event.state.ending) {
+        setStatusBySession((current) => ({
+          ...current,
+          [sessionId]: "Practice debate is ending. Judge and Trainer are reviewing."
+        }));
+      }
+      return;
+    }
+
     if (event.type === "team_preparation_started") {
       setTeamPreparingBySession((current) => ({ ...current, [sessionId]: true }));
       setStatusBySession((current) => ({ ...current, [sessionId]: event.message }));
@@ -757,7 +929,13 @@ export default function Home() {
 
     if (event.type === "interaction_started") {
       setAssignmentsBySession((current) => ({ ...current, [sessionId]: [] }));
-      setStatusBySession((current) => ({ ...current, [sessionId]: "Chat response in progress." }));
+      setStatusBySession((current) => ({
+        ...current,
+        [sessionId]:
+          event.mode === "practice"
+            ? "Practice Debater is responding."
+            : "Chat response in progress."
+      }));
       return;
     }
 
@@ -843,10 +1021,25 @@ export default function Home() {
       return;
     }
 
+    if (event.type === "practice_completed") {
+      setPracticeStateBySession((current) => ({ ...current, [sessionId]: { active: false } }));
+      setEndingPracticeSessionId(null);
+      return;
+    }
+
     if (event.type === "debate_completed" || event.type === "interaction_completed") {
+      if (event.type === "debate_completed") {
+        setPracticeStateBySession((current) => ({ ...current, [sessionId]: { active: false } }));
+        setEndingPracticeSessionId(null);
+      }
       setStatusBySession((current) => ({
         ...current,
-        [sessionId]: event.type === "debate_completed" ? "Judge verdict complete." : "Response complete."
+        [sessionId]:
+          event.type === "debate_completed"
+            ? "Judge verdict complete."
+            : event.mode === "practice"
+              ? "Practice Debater response complete."
+              : "Response complete."
       }));
       setRunningBySession((current) => ({ ...current, [sessionId]: false }));
       socketRefs.current[sessionId]?.close();
@@ -856,6 +1049,7 @@ export default function Home() {
       refreshDebates(sessionId).catch(() => undefined);
       refreshAnalytics(sessionId).catch(() => undefined);
       refreshIntelligence(sessionId).catch(() => undefined);
+      refreshPracticeState(sessionId).catch(() => undefined);
       return;
     }
 
@@ -863,6 +1057,7 @@ export default function Home() {
       setError(formatErrorMessage(event.message));
       setStatusBySession((current) => ({ ...current, [sessionId]: "Stopped." }));
       setRunningBySession((current) => ({ ...current, [sessionId]: false }));
+      setEndingPracticeSessionId(null);
       socketRefs.current[sessionId]?.close();
       refreshModels().catch(() => undefined);
     }
@@ -900,6 +1095,7 @@ export default function Home() {
         analytics={selectedAnalytics}
         analyticsHistory={selectedAnalyticsHistory}
         intelligence={selectedIntelligence}
+        practiceState={selectedPracticeState}
         isTeamPreparing={selectedTeamPreparing}
         showCouncilSettings={showCouncilSettings}
         councilSettings={councilSettings}
@@ -913,13 +1109,19 @@ export default function Home() {
         onModelChange={handleModelChange}
         onDebateChange={handleDebateChange}
         onSend={handleSend}
+        onEndPractice={handleEndPracticeDebate}
         onSettingsChange={handleUpdateSettings}
         onCouncilSettingsChange={handleUpdateCouncilSettings}
         onResetUniversalIdentities={handleResetUniversalIdentities}
+        onResetUserDebateProfile={handleResetUserDebateProfile}
         onFeedbackSubmit={handleSubmitFeedback}
         onRename={handleRename}
         onRenameDebate={handleRenameDebate}
         onDeleteRequest={(session) => {
+          if (councilSettings?.confirmation_preferences?.delete_chat) {
+            handleConfirmDelete(session).catch(() => undefined);
+            return;
+          }
           setDeleteError(null);
           setDeleteTarget(session);
         }}
@@ -928,19 +1130,45 @@ export default function Home() {
           setDeleteDebateTarget({ session, debate });
         }}
         onClearRequest={(session, mode) => {
+          const key = mode === "history" ? "clear_chat_history" : "clear_chat_memory";
+          if (councilSettings?.confirmation_preferences?.[key]) {
+            handleConfirmClear({ session, mode }).catch(() => undefined);
+            return;
+          }
           setClearError(null);
           setClearTarget({ session, mode });
         }}
       />
+      {newChatOpen ? (
+        <NewChatModal
+          draft={newChatDraft}
+          activeTab={newChatTab}
+          models={models}
+          isCreating={creatingSession}
+          onTabChange={setNewChatTab}
+          onDraftChange={setNewChatDraft}
+          onCancel={() => setNewChatOpen(false)}
+          onCreate={handleCreateSessionFromDraft}
+        />
+      ) : null}
+      {practiceStartTarget ? (
+        <PracticeStartDialog
+          side={practiceSideChoice}
+          onSideChange={setPracticeSideChoice}
+          onCancel={() => setPracticeStartTarget(null)}
+          onConfirm={startPracticeFromDialog}
+        />
+      ) : null}
       {deleteTarget ? (
         <ConfirmDialog
           title="Delete chat"
           body={`Delete "${deleteTarget.name}"? This removes its messages and settings.`}
           confirmLabel="Delete"
+          suppressLabel="Do Not Display This Message Next Time"
           isWorking={deletingSessionId === deleteTarget.id}
           error={deleteError}
           onCancel={() => setDeleteTarget(null)}
-          onConfirm={handleConfirmDelete}
+          onConfirm={(suppress) => handleConfirmDelete(undefined, Boolean(suppress))}
         />
       ) : null}
       {deleteAllOpen ? (
@@ -951,7 +1179,7 @@ export default function Home() {
           isWorking={deletingAllSessions}
           error={deleteAllError}
           onCancel={() => setDeleteAllOpen(false)}
-          onConfirm={handleConfirmDeleteAll}
+          onConfirm={() => handleConfirmDeleteAll()}
         />
       ) : null}
       {clearTarget ? (
@@ -967,10 +1195,11 @@ export default function Home() {
               : `Clear memory and visible history for "${clearTarget.session.name}"? Messages, debates, graphs, and saved chat memory for this chat will be permanently removed.`
           }
           confirmLabel={clearTarget.mode === "history" ? "Clear History" : "Clear Memory"}
+          suppressLabel="Do Not Display This Message Next Time"
           isWorking={clearingSessionId === clearTarget.session.id}
           error={clearError}
           onCancel={() => setClearTarget(null)}
-          onConfirm={handleConfirmClear}
+          onConfirm={(suppress) => handleConfirmClear(undefined, Boolean(suppress))}
         />
       ) : null}
       {deleteDebateTarget ? (
@@ -981,7 +1210,7 @@ export default function Home() {
           isWorking={deletingDebateId === deleteDebateTarget.debate.id}
           error={deleteDebateError}
           onCancel={() => setDeleteDebateTarget(null)}
-          onConfirm={handleConfirmDeleteDebate}
+          onConfirm={() => handleConfirmDeleteDebate()}
         />
       ) : null}
     </div>
@@ -1016,10 +1245,296 @@ function formatErrorMessage(value: unknown): string {
   return String(value || "Something went wrong.");
 }
 
+function NewChatModal({
+  draft,
+  activeTab,
+  models,
+  isCreating,
+  onTabChange,
+  onDraftChange,
+  onCancel,
+  onCreate
+}: {
+  draft: NewChatDraft;
+  activeTab: "mode" | "settings";
+  models: ModelsResponse | null;
+  isCreating: boolean;
+  onTabChange: (tab: "mode" | "settings") => void;
+  onDraftChange: (updater: (current: NewChatDraft) => NewChatDraft) => void;
+  onCancel: () => void;
+  onCreate: () => void;
+}) {
+  const unlockedModels = models?.models ?? [];
+  const selectedModel = draft.overall_model || unlockedModels[0]?.name || "";
+  const updatePractice = (updates: Partial<PracticeSettings>) => {
+    onDraftChange((current) => ({
+      ...current,
+      practice_settings: { ...current.practice_settings, ...updates }
+    }));
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
+      <div className="flex max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-md border border-zinc-300 bg-white shadow-xl">
+        <aside className="w-44 shrink-0 border-r border-zinc-300 bg-zinc-50 p-3">
+          {(["mode", "settings"] as const).map((tab) => (
+            <button
+              key={tab}
+              type="button"
+              onClick={() => onTabChange(tab)}
+              className={`mb-2 w-full rounded-md px-3 py-3 text-left text-sm font-semibold ${
+                activeTab === tab ? "bg-zinc-950 text-white" : "text-zinc-700 hover:bg-zinc-100"
+              }`}
+            >
+              {tab === "mode" ? "Mode" : "Chat Settings"}
+            </button>
+          ))}
+        </aside>
+        <section className="min-w-0 flex-1 overflow-y-auto p-5">
+          <div className="mb-4">
+            <p className="text-sm font-medium text-emerald-700">New chat</p>
+            <h2 className="text-2xl font-semibold text-zinc-950">Create a session</h2>
+          </div>
+
+          {activeTab === "mode" ? (
+            <div className="grid gap-3 md:grid-cols-2">
+              <ModeChoice
+                title="AI vs AI Debate"
+                active={draft.mode === "ai_vs_ai"}
+                description="Two AI teams debate, then Judge Assistant and Judge review the result."
+                onClick={() => onDraftChange((current) => ({ ...current, mode: "ai_vs_ai" }))}
+              />
+              <ModeChoice
+                title="AI vs Human Debate Training"
+                active={draft.mode === "ai_vs_human"}
+                description="You debate one Practice Debater, then Judge and Debate Trainer coach you."
+                onClick={() => onDraftChange((current) => ({ ...current, mode: "ai_vs_human" }))}
+              />
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <label className="block text-sm font-medium text-zinc-900">
+                Overall model
+                <select
+                  value={selectedModel}
+                  onChange={(event) =>
+                    onDraftChange((current) => ({ ...current, overall_model: event.target.value }))
+                  }
+                  className="mt-1 h-11 w-full rounded-md border border-zinc-300 bg-white px-3"
+                >
+                  {unlockedModels.length === 0 ? <option value="">No verified models</option> : null}
+                  {unlockedModels.map((model) => (
+                    <option key={model.name} value={model.name}>
+                      {model.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              {draft.mode === "ai_vs_ai" ? (
+                <label className="block text-sm font-medium text-zinc-900">
+                  Debater amount per team
+                  <select
+                    value={draft.debaters_per_team}
+                    onChange={(event) =>
+                      onDraftChange((current) => ({
+                        ...current,
+                        debaters_per_team: Number(event.target.value)
+                      }))
+                    }
+                    className="mt-1 h-11 w-full rounded-md border border-zinc-300 bg-white px-3"
+                  >
+                    {[1, 2, 3, 4].map((value) => (
+                      <option key={value} value={value}>
+                        {value}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ) : (
+                <div className="grid gap-3 md:grid-cols-2">
+                  <SelectField
+                    label="Human side default"
+                    value={draft.practice_settings.human_side}
+                    options={["Auto", "Pro", "Con"]}
+                    onChange={(value) => updatePractice({ human_side: value as PracticeSettings["human_side"] })}
+                  />
+                  <SelectField
+                    label="Practice flow"
+                    value={draft.practice_settings.practice_flow}
+                    options={["Free", "Structured"]}
+                    onChange={(value) =>
+                      updatePractice({ practice_flow: value as PracticeSettings["practice_flow"] })
+                    }
+                  />
+                  {draft.practice_settings.practice_flow === "Structured" ? (
+                    <label className="block text-sm font-medium text-zinc-900">
+                      Structured rounds
+                      <input
+                        type="number"
+                        min={1}
+                        max={12}
+                        value={draft.practice_settings.structured_rounds}
+                        onChange={(event) =>
+                          updatePractice({
+                            structured_rounds: Math.max(1, Math.min(12, Number(event.target.value) || 1))
+                          })
+                        }
+                        className="mt-1 h-11 w-full rounded-md border border-zinc-300 px-3"
+                      />
+                    </label>
+                  ) : null}
+                  <SelectField
+                    label="Opponent difficulty"
+                    value={draft.practice_settings.opponent_difficulty}
+                    options={["Adaptive", "Beginner", "Normal", "Hard"]}
+                    onChange={(value) =>
+                      updatePractice({
+                        opponent_difficulty: value as PracticeSettings["opponent_difficulty"]
+                      })
+                    }
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="mt-6 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={isCreating}
+              className="rounded-md border border-zinc-300 px-4 py-2 text-sm font-semibold text-zinc-800 hover:bg-zinc-100"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={onCreate}
+              disabled={isCreating}
+              className="rounded-md bg-zinc-950 px-4 py-2 text-sm font-semibold text-white hover:bg-zinc-800 disabled:cursor-not-allowed disabled:bg-zinc-400"
+            >
+              {isCreating ? "Creating..." : "Create Chat"}
+            </button>
+          </div>
+        </section>
+      </div>
+    </div>
+  );
+}
+
+function ModeChoice({
+  title,
+  description,
+  active,
+  onClick
+}: {
+  title: string;
+  description: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`rounded-md border p-4 text-left ${
+        active ? "border-zinc-950 bg-zinc-100" : "border-zinc-300 hover:bg-zinc-50"
+      }`}
+    >
+      <p className="font-semibold text-zinc-950">{title}</p>
+      <p className="mt-2 text-sm leading-6 text-zinc-600">{description}</p>
+    </button>
+  );
+}
+
+function SelectField({
+  label,
+  value,
+  options,
+  onChange
+}: {
+  label: string;
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+}) {
+  return (
+    <label className="block text-sm font-medium text-zinc-900">
+      {label}
+      <select
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="mt-1 h-11 w-full rounded-md border border-zinc-300 bg-white px-3"
+      >
+        {options.map((option) => (
+          <option key={option} value={option}>
+            {option}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+function PracticeStartDialog({
+  side,
+  onSideChange,
+  onCancel,
+  onConfirm
+}: {
+  side: "Auto" | "Pro" | "Con";
+  onSideChange: (side: "Auto" | "Pro" | "Con") => void;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+      <div className="w-full max-w-lg rounded-md border border-zinc-300 bg-white p-5 shadow-xl">
+        <h2 className="text-lg font-semibold text-zinc-950">Choose your side</h2>
+        <p className="mt-2 text-sm leading-6 text-zinc-700">
+          Pro supports the topic. Con challenges it. Auto chooses the side that best helps your stored debate profile improve.
+        </p>
+        <div className="mt-4 grid gap-2 sm:grid-cols-3">
+          {(["Auto", "Pro", "Con"] as const).map((option) => (
+            <button
+              key={option}
+              type="button"
+              onClick={() => onSideChange(option)}
+              className={`rounded-md border px-4 py-3 text-sm font-semibold ${
+                side === option ? "border-zinc-950 bg-zinc-100" : "border-zinc-300 hover:bg-zinc-50"
+              }`}
+            >
+              {option}
+            </button>
+          ))}
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            className="rounded-md border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-800 hover:bg-zinc-100"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            className="rounded-md bg-zinc-950 px-4 py-2 text-sm font-semibold text-white hover:bg-zinc-800"
+          >
+            Start Practice
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ConfirmDialog({
   title,
   body,
   confirmLabel,
+  suppressLabel,
   isWorking,
   error,
   onCancel,
@@ -1028,11 +1543,13 @@ function ConfirmDialog({
   title: string;
   body: string;
   confirmLabel: string;
+  suppressLabel?: string;
   isWorking: boolean;
   error: string | null;
   onCancel: () => void;
-  onConfirm: () => void;
+  onConfirm: (suppressFuture?: boolean) => void;
 }) {
+  const [suppressFuture, setSuppressFuture] = useState(false);
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
       <div className="w-full max-w-md rounded-md border border-zinc-300 bg-white p-5 shadow-xl">
@@ -1042,6 +1559,17 @@ function ConfirmDialog({
           <p className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">
             {error}
           </p>
+        ) : null}
+        {suppressLabel ? (
+          <label className="mt-4 flex items-center gap-2 text-sm text-zinc-700">
+            <input
+              type="checkbox"
+              checked={suppressFuture}
+              onChange={(event) => setSuppressFuture(event.target.checked)}
+              className="h-4 w-4"
+            />
+            {suppressLabel}
+          </label>
         ) : null}
         <div className="mt-5 flex justify-end gap-2">
           <button
@@ -1054,7 +1582,7 @@ function ConfirmDialog({
           </button>
           <button
             type="button"
-            onClick={onConfirm}
+            onClick={() => onConfirm(suppressFuture)}
             disabled={isWorking}
             className="rounded-md bg-red-700 px-4 py-2 text-sm font-semibold text-white hover:bg-red-800 disabled:cursor-not-allowed disabled:bg-zinc-400"
           >
