@@ -171,7 +171,7 @@ On Windows PowerShell, use:
 This usually means Uvicorn is installed inside the project's virtual environment, but your shell PATH is not currently pointing at that environment. Start the backend with the venv Python module command instead:
 
 ```bash
-cd "/Users/EvanLu/AI Debate Council - MultiAI System - CodeX"
+cd "/path/to/AI Debate Council - MultiAI System - CodeX"
 .venv/bin/python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 

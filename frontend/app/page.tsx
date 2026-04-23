@@ -59,6 +59,16 @@ const DEFAULT_PRACTICE_SETTINGS: PracticeSettings = {
   training_focus: "Full Debate",
   opponent_difficulty: "Adaptive"
 };
+
+function defaultNewChatDraft(modelName = ""): NewChatDraft {
+  return {
+    mode: "ai_vs_ai",
+    overall_model: modelName,
+    debaters_per_team: 2,
+    practice_settings: { ...DEFAULT_PRACTICE_SETTINGS }
+  };
+}
+
 type ClearTarget = { session: ChatSession; mode: "history" | "memory" };
 type DebateDeleteTarget = { session: ChatSession; debate: DebateRecord };
 type NewChatDraft = {
@@ -99,12 +109,7 @@ export default function Home() {
   const [showCouncilSettings, setShowCouncilSettings] = useState(false);
   const [newChatOpen, setNewChatOpen] = useState(false);
   const [newChatTab, setNewChatTab] = useState<"mode" | "settings">("mode");
-  const [newChatDraft, setNewChatDraft] = useState<NewChatDraft>({
-    mode: "ai_vs_ai",
-    overall_model: "",
-    debaters_per_team: 2,
-    practice_settings: DEFAULT_PRACTICE_SETTINGS
-  });
+  const [newChatDraft, setNewChatDraft] = useState<NewChatDraft>(defaultNewChatDraft());
   const [creatingSession, setCreatingSession] = useState(false);
   const [practiceStartTarget, setPracticeStartTarget] = useState<{
     sessionId: string;
@@ -112,7 +117,6 @@ export default function Home() {
     modelName: string;
   } | null>(null);
   const [practiceSideChoice, setPracticeSideChoice] = useState<"Auto" | "Pro" | "Con">("Auto");
-  const [endingPracticeSessionId, setEndingPracticeSessionId] = useState<string | null>(null);
   const [activePanel, setActivePanel] = useState<RoomPanel>("chat");
   const [error, setError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ChatSession | null>(null);
@@ -132,6 +136,7 @@ export default function Home() {
   const socketRefs = useRef<Record<string, WebSocket>>({});
   const retryTimerRefs = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const modelBySessionRef = useRef<Record<string, string>>({});
+  const selectedIdRef = useRef<string | null>(null);
 
   const selectedSession = sessions.find((session) => session.id === selectedId) ?? null;
   const selectedMessages = selectedId ? messagesBySession[selectedId] ?? [] : [];
@@ -157,6 +162,10 @@ export default function Home() {
   useEffect(() => {
     modelBySessionRef.current = modelBySession;
   }, [modelBySession]);
+
+  useEffect(() => {
+    selectedIdRef.current = selectedId;
+  }, [selectedId]);
 
   const refreshSessions = useCallback(async () => {
     const nextSessions = await listSessions();
@@ -275,12 +284,17 @@ export default function Home() {
     if (!selectedId) {
       return;
     }
+    const requestSessionId = selectedId;
     setActivePanel("chat");
     refreshMessages(selectedId).catch((exc) => {
-      setError(exc instanceof Error ? exc.message : "Could not load messages.");
+      if (selectedIdRef.current === requestSessionId) {
+        setError(exc instanceof Error ? exc.message : "Could not load messages.");
+      }
     });
     refreshSettings(selectedId).catch((exc) => {
-      setError(exc instanceof Error ? exc.message : "Could not load settings.");
+      if (selectedIdRef.current === requestSessionId) {
+        setError(exc instanceof Error ? exc.message : "Could not load settings.");
+      }
     });
     refreshDebates(selectedId).catch(() => undefined);
     refreshAnalytics(selectedId).catch(() => undefined);
@@ -303,10 +317,7 @@ export default function Home() {
   }, [models, selectedId, settingsBySession]);
 
   async function handleNewSession() {
-    setNewChatDraft((current) => ({
-      ...current,
-      overall_model: current.overall_model || models?.models[0]?.name || ""
-    }));
+    setNewChatDraft(defaultNewChatDraft(models?.models[0]?.name || ""));
     setNewChatTab("mode");
     setNewChatOpen(true);
   }
@@ -341,6 +352,11 @@ export default function Home() {
   function handleSelect(id: string) {
     setSelectedId(id);
     setShowCouncilSettings(false);
+    setPracticeStartTarget(null);
+    setDeleteTarget(null);
+    setClearTarget(null);
+    setDeleteDebateTarget(null);
+    setDeleteAllOpen(false);
     setError(null);
   }
 
@@ -400,10 +416,10 @@ export default function Home() {
           }
         });
       }
-      await deleteSession(target.id);
       clearSocketRetry(target.id);
       socketRefs.current[target.id]?.close();
       delete socketRefs.current[target.id];
+      await deleteSession(target.id);
       const sessionList = await refreshSessions();
       setMessagesBySession((current) => removeKey(current, target.id));
       setPartialBySession((current) => removeKey(current, target.id));
@@ -420,7 +436,7 @@ export default function Home() {
       setPracticeStateBySession((current) => removeKey(current, target.id));
       setRunningBySession((current) => removeKey(current, target.id));
       setTeamPreparingBySession((current) => removeKey(current, target.id));
-      if (selectedId === target.id) {
+      if (selectedIdRef.current === target.id) {
         setSelectedId(sessionList[0]?.id ?? null);
       }
       setDeleteTarget(null);
@@ -443,11 +459,11 @@ export default function Home() {
     setError(null);
 
     try {
-      await deleteAllSessions();
       Object.keys(retryTimerRefs.current).forEach((sessionId) => clearSocketRetry(sessionId));
       Object.values(socketRefs.current).forEach((socket) => socket.close());
       socketRefs.current = {};
       modelBySessionRef.current = {};
+      await deleteAllSessions();
       setSessions([]);
       setSelectedId(null);
       setMessagesBySession({});
@@ -500,6 +516,9 @@ export default function Home() {
           }
         });
       }
+      clearSocketRetry(session.id);
+      socketRefs.current[session.id]?.close();
+      delete socketRefs.current[session.id];
       if (mode === "history") {
         await clearSessionHistory(session.id);
       } else {
@@ -589,12 +608,8 @@ export default function Home() {
 
     try {
       await deleteDebateStatistics(session.id, debate.id);
-      const nextDebates = (debatesBySession[session.id] ?? []).filter(
-        (item) => item.id !== debate.id
-      );
-      setDebatesBySession((current) => ({ ...current, [session.id]: nextDebates }));
+      const nextDebates = await refreshDebates(session.id);
       const nextSelected = nextDebates[0]?.id ?? "";
-      setSelectedDebateBySession((current) => ({ ...current, [session.id]: nextSelected }));
       setAnalyticsHistoryBySession((current) => ({ ...current, [session.id]: [] }));
       if (nextSelected) {
         await refreshAnalytics(session.id, nextSelected);
@@ -806,7 +821,6 @@ export default function Home() {
         return;
       }
       setRunningBySession((current) => ({ ...current, [sessionId]: false }));
-      setEndingPracticeSessionId(null);
       setPartialBySession((current) => ({ ...current, [sessionId]: {} }));
       setStatusBySession((current) => ({
         ...current,
@@ -878,7 +892,6 @@ export default function Home() {
       return;
     }
     const sessionId = selectedId;
-    setEndingPracticeSessionId(sessionId);
     setError(null);
     setStatusBySession((current) => ({ ...current, [sessionId]: "Ending practice debate..." }));
     setRunningBySession((current) => ({ ...current, [sessionId]: true }));
@@ -1042,14 +1055,12 @@ export default function Home() {
 
     if (event.type === "practice_completed") {
       setPracticeStateBySession((current) => ({ ...current, [sessionId]: { active: false } }));
-      setEndingPracticeSessionId(null);
       return;
     }
 
     if (event.type === "debate_completed" || event.type === "interaction_completed") {
       if (event.type === "debate_completed") {
         setPracticeStateBySession((current) => ({ ...current, [sessionId]: { active: false } }));
-        setEndingPracticeSessionId(null);
       }
       setStatusBySession((current) => ({
         ...current,
@@ -1076,7 +1087,6 @@ export default function Home() {
       setError(formatErrorMessage(event.message));
       setStatusBySession((current) => ({ ...current, [sessionId]: "Stopped." }));
       setRunningBySession((current) => ({ ...current, [sessionId]: false }));
-      setEndingPracticeSessionId(null);
       socketRefs.current[sessionId]?.close();
       refreshModels().catch(() => undefined);
     }
@@ -1570,10 +1580,64 @@ function ConfirmDialog({
   onConfirm: (suppressFuture?: boolean) => void;
 }) {
   const [suppressFuture, setSuppressFuture] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    setSuppressFuture(false);
+  }, [title, body]);
+
+  useEffect(() => {
+    const focusable = dialogRef.current?.querySelector<HTMLElement>(
+      "button, input, select, textarea, [tabindex]:not([tabindex='-1'])"
+    );
+    focusable?.focus();
+  }, [title, body]);
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape" && !isWorking) {
+        onCancel();
+      }
+      if (event.key !== "Tab" || !dialogRef.current) {
+        return;
+      }
+      const focusable = Array.from(
+        dialogRef.current.querySelectorAll<HTMLElement>(
+          "button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex]:not([tabindex='-1'])"
+        )
+      ).filter((element) => element.offsetParent !== null);
+      if (focusable.length === 0) {
+        return;
+      }
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isWorking, onCancel]);
+
+  const workingLabel = confirmLabel.startsWith("Clear")
+    ? "Clearing..."
+    : confirmLabel.startsWith("Rename")
+      ? "Renaming..."
+      : "Deleting...";
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
-      <div className="w-full max-w-md rounded-md border border-zinc-300 bg-white p-5 shadow-xl">
-        <h2 className="text-lg font-semibold text-zinc-950">{title}</h2>
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="confirm-dialog-title"
+        ref={dialogRef}
+        className="w-full max-w-md rounded-md border border-zinc-300 bg-white p-5 shadow-xl"
+      >
+        <h2 id="confirm-dialog-title" className="text-lg font-semibold text-zinc-950">{title}</h2>
         <p className="mt-2 text-sm leading-6 text-zinc-700">{body}</p>
         {error ? (
           <p className="mt-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-800">
@@ -1606,7 +1670,7 @@ function ConfirmDialog({
             disabled={isWorking}
             className="rounded-md bg-red-700 px-4 py-2 text-sm font-semibold text-white hover:bg-red-800 disabled:cursor-not-allowed disabled:bg-zinc-400"
           >
-            {isWorking ? "Deleting..." : confirmLabel}
+            {isWorking ? workingLabel : confirmLabel}
           </button>
         </div>
       </div>

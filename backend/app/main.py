@@ -577,14 +577,26 @@ async def debate_socket(websocket: WebSocket, session_id: str):
             except ClientDisconnectedError:
                 return
             except DebateError as exc:
-                if not await safe_send_json(websocket, {"type": "error", "message": str(exc)}):
+                if not await safe_send_json(
+                    websocket,
+                    {"type": "error", "message": debate_manager._provider_error_message(exc)},
+                ):
                     return
             except WebSocketDisconnect:
                 raise
             except Exception as exc:
+                runtime_diary.record(
+                    "backend terminal",
+                    "websocket handler error",
+                    debate_manager._provider_error_message(exc),
+                    session_id=session_id,
+                )
                 if not await safe_send_json(
                     websocket,
-                    {"type": "error", "message": f"Debate failed: {exc}"},
+                    {
+                        "type": "error",
+                        "message": "Debate failed because of an internal server error. Check the backend terminal for the sanitized details.",
+                    },
                 ):
                     return
     except WebSocketDisconnect:

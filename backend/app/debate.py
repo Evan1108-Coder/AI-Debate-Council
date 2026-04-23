@@ -12,7 +12,14 @@ from fastapi import WebSocket, WebSocketDisconnect
 
 from .analytics import analyze_debate, format_analytics_report, session_chart_data
 from .config import settings
-from .costing import CostTracker, estimate_messages_tokens, estimate_tokens, message_input_text
+from .costing import (
+    CostTracker,
+    EXCHANGE_RATES_PER_USD,
+    estimate_messages_tokens,
+    estimate_tokens,
+    message_input_text,
+    normalize_currency,
+)
 from .database import Database, utc_now
 from .model_registry import (
     MOCK_MODEL,
@@ -211,14 +218,22 @@ class DebateManager:
                 )
                 return
             if session_record.get("mode") == "ai_vs_human":
-                await self.run_practice_interaction(
-                    websocket=websocket,
-                    session_id=session_id,
-                    content=cleaned_content,
-                    selected_model=selected_model,
-                    cost_tracker=cost_tracker,
-                    requested_side=practice_side,
-                )
+                try:
+                    await self.run_practice_interaction(
+                        websocket=websocket,
+                        session_id=session_id,
+                        content=cleaned_content,
+                        selected_model=selected_model,
+                        cost_tracker=cost_tracker,
+                        requested_side=practice_side,
+                    )
+                except Exception:
+                    active_practice = self.db.get_active_practice_debate(session_id)
+                    if active_practice:
+                        self.db.fail_debate(active_practice["id"], "Practice turn failed.")
+                        async with self._lock:
+                            self._active_debates.discard(active_practice["id"])
+                    raise
                 return
             if self._council_assistant_always_on(session_settings):
                 intent = "chat"
@@ -678,26 +693,34 @@ class DebateManager:
         ai_side = "con" if human_side == "pro" else "pro"
         if active_debate:
             debate = active_debate
+            async with self._lock:
+                self._active_debates.add(debate["id"])
             metadata = debate.get("metadata") if isinstance(debate.get("metadata"), dict) else {}
             human_side = str(metadata.get("human_side") or human_side)
             ai_side = str(metadata.get("ai_side") or ("con" if human_side == "pro" else "pro"))
             topic = str(debate.get("topic") or content)
         else:
             topic = content
-            debate = self.db.create_debate(
-                session_id,
-                topic,
-                mode="practice",
-                metadata={
-                    "human_side": human_side,
-                    "ai_side": ai_side,
-                    "side_source": side_choice["source"],
-                    "side_reason": side_choice["reason"],
-                    "practice_flow": practice_settings["practice_flow"],
-                    "structured_rounds": practice_settings["structured_rounds"],
-                    "human_turns": 0,
-                },
-            )
+            async with self._lock:
+                if len(self._active_debates) >= settings.max_active_debates:
+                    raise DebateError(
+                        "Only 3 debates can run at the same time. Try again when one finishes."
+                    )
+                debate = self.db.create_debate(
+                    session_id,
+                    topic,
+                    mode="practice",
+                    metadata={
+                        "human_side": human_side,
+                        "ai_side": ai_side,
+                        "side_source": side_choice["source"],
+                        "side_reason": side_choice["reason"],
+                        "practice_flow": practice_settings["practice_flow"],
+                        "structured_rounds": practice_settings["structured_rounds"],
+                        "human_turns": 0,
+                    },
+                )
+                self._active_debates.add(debate["id"])
             await self._send_json(
                 websocket,
                 {
@@ -842,23 +865,40 @@ class DebateManager:
         session_id: str,
         selected_model_name: str,
     ) -> None:
-        session_settings = self._settings_snapshot(session_id)
-        effective_model_name = selected_model_name.strip() or str(
-            session_settings.get("overall_model", "")
-        ).strip()
-        selected_model = self._resolve_selected_model(effective_model_name)
-        cost_tracker = CostTracker()
-        debate = self.db.get_active_practice_debate(session_id)
-        if not debate:
-            raise DebateError("No active practice debate is running in this chat.")
-        await self._finalize_practice_debate(
-            websocket=websocket,
-            session_id=session_id,
-            debate_id=debate["id"],
-            topic=str(debate.get("topic") or ""),
-            selected_model=selected_model,
-            cost_tracker=cost_tracker,
-        )
+        async with self._lock:
+            if session_id in self._active_sessions:
+                raise DebateError("This chat is already working. Other chats are still available.")
+            self._active_sessions.add(session_id)
+        debate: dict[str, Any] | None = None
+        try:
+            session_settings = self._settings_snapshot(session_id)
+            effective_model_name = selected_model_name.strip() or str(
+                session_settings.get("overall_model", "")
+            ).strip()
+            selected_model = self._resolve_selected_model(effective_model_name)
+            cost_tracker = CostTracker()
+            debate = self.db.get_active_practice_debate(session_id)
+            if not debate:
+                raise DebateError("No active practice debate is running in this chat.")
+            async with self._lock:
+                self._active_debates.add(debate["id"])
+            await self._finalize_practice_debate(
+                websocket=websocket,
+                session_id=session_id,
+                debate_id=debate["id"],
+                topic=str(debate.get("topic") or ""),
+                selected_model=selected_model,
+                cost_tracker=cost_tracker,
+            )
+        except Exception:
+            if debate:
+                self.db.fail_debate(debate["id"], "Practice debate ending failed.")
+                async with self._lock:
+                    self._active_debates.discard(debate["id"])
+            raise
+        finally:
+            async with self._lock:
+                self._active_sessions.discard(session_id)
 
     async def _finalize_practice_debate(
         self,
@@ -973,8 +1013,16 @@ class DebateManager:
             judge_summary=judge_summary,
             trainer_report=trainer_report,
         )
-        cost_summary = cost_tracker.summary(session_settings.get("cost_currency", "USD"))
+        cost_summary = self._debate_total_cost_summary(
+            session_id,
+            debate_id,
+            cost_tracker,
+            session_settings.get("cost_currency", "USD"),
+        )
         self.db.complete_debate(debate_id, judge_summary)
+        async with self._lock:
+            self._active_debates.discard(debate_id)
+            active_after_completion = len(self._active_debates)
         await self._send_json(
             websocket,
             {
@@ -990,7 +1038,7 @@ class DebateManager:
                 "type": "debate_completed",
                 "debate_id": debate_id,
                 "judge_summary": judge_summary,
-                "active_debates": self.active_count,
+                "active_debates": active_after_completion,
                 "cost_summary": cost_summary,
             },
         )
@@ -1705,6 +1753,84 @@ class DebateManager:
             "rounds_left": rounds_left,
         }
 
+    def _debate_total_cost_summary(
+        self,
+        session_id: str,
+        debate_id: str,
+        cost_tracker: CostTracker,
+        currency: str,
+    ) -> dict[str, Any]:
+        summaries = [
+            message.get("cost_summary")
+            for message in self.db.list_messages_for_debate(
+                session_id, debate_id, include_hidden=True
+            )
+            if isinstance(message.get("cost_summary"), dict)
+        ]
+        if not summaries:
+            return cost_tracker.summary(currency)
+        normalized_currency = normalize_currency(str(currency))
+        rate = EXCHANGE_RATES_PER_USD[normalized_currency]
+        models: dict[str, dict[str, Any]] = {}
+        warnings: list[str] = []
+        pricing_complete = True
+        for summary in summaries:
+            pricing_complete = pricing_complete and bool(summary.get("pricing_complete", True))
+            for warning in summary.get("warnings") or []:
+                if isinstance(warning, str) and warning not in warnings:
+                    warnings.append(warning)
+            for item in summary.get("models") or []:
+                if not isinstance(item, dict):
+                    continue
+                model_name = str(item.get("model") or "unknown")
+                current = models.setdefault(
+                    model_name,
+                    {
+                        "model": model_name,
+                        "input_tokens": 0,
+                        "output_tokens": 0,
+                        "calls": 0,
+                        "cost_usd": 0.0,
+                        "input_usd_per_1m": item.get("input_usd_per_1m", 0.0),
+                        "output_usd_per_1m": item.get("output_usd_per_1m", 0.0),
+                        "pricing_source": item.get("pricing_source", ""),
+                        "pricing_live": bool(item.get("pricing_live", False)),
+                        "pricing_available": bool(item.get("pricing_available", True)),
+                    },
+                )
+                current["input_tokens"] += int(item.get("input_tokens") or 0)
+                current["output_tokens"] += int(item.get("output_tokens") or 0)
+                current["calls"] += int(item.get("calls") or 0)
+                current["cost_usd"] += float(item.get("cost_usd") or 0.0)
+                if not item.get("pricing_available", True):
+                    current["pricing_available"] = False
+                    pricing_complete = False
+        model_items = []
+        for item in models.values():
+            converted = float(item["cost_usd"]) * rate
+            model_items.append(
+                {
+                    **item,
+                    "cost": round(converted, 8),
+                    "cost_usd": round(float(item["cost_usd"]), 8),
+                }
+            )
+        model_items.sort(key=lambda item: item["cost_usd"], reverse=True)
+        total_usd = sum(float(item["cost_usd"]) for item in model_items)
+        return {
+            "currency": normalized_currency,
+            "total": round(total_usd * rate, 8),
+            "total_usd": round(total_usd, 8),
+            "input_tokens": sum(int(item["input_tokens"]) for item in model_items),
+            "output_tokens": sum(int(item["output_tokens"]) for item in model_items),
+            "calls": sum(int(item["calls"]) for item in model_items),
+            "models": model_items,
+            "estimated": True,
+            "pricing_complete": pricing_complete,
+            "warnings": warnings,
+            "rate_source": "Aggregated from saved message cost summaries.",
+        }
+
     def _practice_phase(self, *, title: str, index: int, total: int, kind: str) -> dict[str, Any]:
         key = re.sub(r"[^a-z0-9]+", "_", title.lower()).strip("_") or kind
         return {
@@ -1723,9 +1849,7 @@ class DebateManager:
         ai_side: str,
     ) -> list[dict[str, Any]]:
         transcript = []
-        for message in self.db.list_messages(session_id, include_hidden=True):
-            if message.get("debate_id") != debate_id:
-                continue
+        for message in self.db.list_messages_for_debate(session_id, debate_id, include_hidden=True):
             role = str(message.get("role") or "")
             if role == "practice_user":
                 team = human_side
@@ -1745,7 +1869,7 @@ class DebateManager:
                     "role": role,
                     "team": team,
                     "archetype": archetype,
-                    "round": message.get("phase_index") or message.get("sequence") or 0,
+                    "round": message.get("phase_index") or 0,
                     "model": message.get("model") or "",
                     "intent": "practice debate turn",
                     "target": "the practice debate",
@@ -2342,12 +2466,13 @@ class DebateManager:
                 break
             except Exception as exc:
                 last_exc = exc
-                self._maybe_disable_model_route(model, exc)
-                raise
+                continue
         if response is None:
             assert last_exc is not None
             self._maybe_disable_model_route(model, last_exc)
-            raise last_exc
+            raise DebateError(
+                f"{model.name} failed while preparing private notes: {self._provider_error_message(last_exc)}"
+            ) from last_exc
         text = sanitize_model_text(self._completion_text(response).strip())
         if cost_tracker is not None:
             cost_tracker.record_call(
@@ -2800,8 +2925,6 @@ class DebateManager:
             "negative",
             "opposing side",
             "opposing team",
-            "against",
-            "skeptical",
         )
         comparison_winner = self._detect_comparison_winner(text)
         if comparison_winner != "unclear":
@@ -2831,10 +2954,40 @@ class DebateManager:
                 return comparison_winner
             pro_hit = any(re.search(rf"\b{re.escape(alias)}\b", sentence) for alias in pro_aliases)
             con_hit = any(re.search(rf"\b{re.escape(alias)}\b", sentence) for alias in con_aliases)
+            if pro_hit and con_hit:
+                nearby_winner = self._detect_nearby_winner_signal(
+                    sentence, pro_aliases, con_aliases
+                )
+                if nearby_winner != "unclear":
+                    return nearby_winner
             if pro_hit and not con_hit:
                 return "pro"
             if con_hit and not pro_hit:
                 return "con"
+        return "unclear"
+
+    def _detect_nearby_winner_signal(
+        self, sentence: str, pro_aliases: tuple[str, ...], con_aliases: tuple[str, ...]
+    ) -> str:
+        signal_matches = list(
+            re.finditer(
+                r"\b(win(?:s|ning|ner)?|stronger case|better case|winning position|prevails?|favou?rs?|takes? the debate|edges? out)\b",
+                sentence,
+            )
+        )
+        if not signal_matches:
+            return "unclear"
+        side_positions: list[tuple[str, int]] = []
+        for side, aliases in (("pro", pro_aliases), ("con", con_aliases)):
+            for alias in aliases:
+                for match in re.finditer(rf"\b{re.escape(alias)}\b", sentence):
+                    side_positions.append((side, match.start()))
+        if not side_positions:
+            return "unclear"
+        for signal in signal_matches:
+            nearest = min(side_positions, key=lambda item: abs(item[1] - signal.start()))
+            if abs(nearest[1] - signal.start()) <= 80:
+                return nearest[0]
         return "unclear"
 
     def _detect_comparison_winner(self, text: str) -> str:
@@ -2959,17 +3112,18 @@ class DebateManager:
         for vote in ai_votes:
             vote_counts[vote if vote in vote_counts else "unclear"] += 1
         total_votes = max(1, sum(vote_counts.values()))
-        scores = {
-            side: (1.0 - analytics_weight) * (count / total_votes)
-            for side, count in vote_counts.items()
-        }
         analytics_signal = self._analytics_verdict_signal(analysis)
         signal_winner = str(analytics_signal.get("winner") or "unclear")
         confidence = self._safe_float(analytics_signal.get("confidence"), 0.0)
+        effective_analytics_weight = analytics_weight * confidence
+        scores = {
+            side: (1.0 - effective_analytics_weight) * (count / total_votes)
+            for side, count in vote_counts.items()
+        }
         if signal_winner not in scores:
             signal_winner = "unclear"
-        scores[signal_winner] += analytics_weight * confidence
-        scores["unclear"] += analytics_weight * (1.0 - confidence)
+        if effective_analytics_weight > 0:
+            scores[signal_winner] += effective_analytics_weight
         ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
         winner = ranked[0][0]
         if len(ranked) > 1 and ranked[0][1] - ranked[1][1] < 0.04:
@@ -2980,6 +3134,8 @@ class DebateManager:
             "vote_counts": vote_counts,
             "analytics_signal": analytics_signal,
             "analytics_weight": analytics_weight,
+            "effective_analytics_weight": effective_analytics_weight,
+            "tie": len(ranked) > 1 and ranked[0][1] - ranked[1][1] < 0.04,
         }
 
     def _safe_float(self, value: object, default: float = 0.0) -> float:
@@ -3022,6 +3178,10 @@ class DebateManager:
             f"{round(self._safe_float(signal.get('confidence')) * 100)}% confidence; "
             f"the weighted result favors {self._winner_label(final_winner)}."
         )
+        if result.get("tie"):
+            reason = (
+                f"{reason} The weighted scores were close enough to treat the result as unresolved."
+            )
         note = (
             f"Weighted verdict note: analytics weight {round(result['analytics_weight'] * 100)}%. "
             f"Scores: Pro {scores['pro']}, Con {scores['con']}, Unclear {scores['unclear']}."
@@ -3058,6 +3218,10 @@ class DebateManager:
             f"{round(self._safe_float(signal.get('confidence')) * 100)}% confidence. "
             f"After weighting, {self._winner_label(final_winner)} is the final verdict."
         )
+        if result.get("tie"):
+            reason = (
+                f"{reason} The panel/analytics scores were effectively tied, so the final result is marked unclear."
+            )
         panel_notes = []
         for index, summary in enumerate(panel_summaries, start=1):
             winner = self._winner_label(self._detect_winner(summary))
@@ -3309,7 +3473,7 @@ class DebateManager:
             )
 
         panel_summaries: list[str] = []
-        temperature_offsets = [-0.08, 0.08, 0.0, -0.14, 0.14]
+        temperature_offsets = [0.0, -0.08, 0.08, -0.14, 0.14]
         for index in range(panel_size):
             panel_generation = dict(generation_settings)
             panel_generation["temperature"] = max(
@@ -3744,6 +3908,17 @@ class DebateManager:
         else:
             text = str(value)
         text = re.sub(r"\x1b\[[0-9;]*m", "", text)
+        text = re.sub(
+            r"(?i)(api[_-]?key|authorization|bearer|token|secret)(['\"=: ]+)([A-Za-z0-9._\-]{8,})",
+            r"\1\2[redacted]",
+            text,
+        )
+        text = re.sub(
+            r"\b(sk-[A-Za-z0-9_\-]{8,}|sk-ant-[A-Za-z0-9_\-]{8,}|gsk_[A-Za-z0-9_\-]{8,}|gh[pousr]_[A-Za-z0-9_]{8,})\b",
+            "[redacted]",
+            text,
+        )
+        text = re.sub(r"/Users/[^\s'\"<>]+", "[local-path]", text)
         text = re.sub(r"\s+", " ", text).strip()
         return text[:1200]
 
@@ -3911,7 +4086,9 @@ class DebateManager:
                     raise ClientDisconnectedError(
                         "Browser disconnected before the response finished."
                     ) from exc
-                raise CompletionStreamError(exc, had_output=bool(parts)) from exc
+                if parts:
+                    raise CompletionStreamError(exc, had_output=True) from exc
+                continue
         else:
             assert last_exc is not None
             raise CompletionStreamError(last_exc, had_output=False) from last_exc
@@ -4459,7 +4636,19 @@ class DebateManager:
         ):
             return "User debate profile is off for this chat or council."
         profile = self.db.get_user_debate_profile()
-        return json.dumps(profile, ensure_ascii=False, indent=2)
+        strengths = "; ".join(str(item) for item in (profile.get("strengths") or [])[-3:])
+        weaknesses = "; ".join(str(item) for item in (profile.get("weaknesses") or [])[-3:])
+        notes = "; ".join(str(item) for item in (profile.get("trainer_notes") or [])[-3:])
+        return dedent(
+            f"""
+            Practice debates completed: {int(profile.get("practice_debates_completed", 0) or 0)}
+            Side history: {profile.get("side_history") if isinstance(profile.get("side_history"), dict) else {}}
+            Recent strengths: {strengths or "none recorded yet"}
+            Recent improvement targets: {weaknesses or "none recorded yet"}
+            Recent trainer notes: {notes or "none recorded yet"}
+            Use this as private coaching context. Do not quote raw profile fields or JSON to the user.
+            """
+        ).strip()
 
     def _update_user_profile_from_practice(
         self,
@@ -4496,7 +4685,7 @@ class DebateManager:
         style_tags.append("practice_debate")
         return self.db.update_user_debate_profile(
             {
-                "debates_completed": int(profile.get("debates_completed", 0) or 0) + 1,
+                "debates_completed": int(profile.get("debates_completed", 0) or 0),
                 "practice_debates_completed": int(profile.get("practice_debates_completed", 0) or 0) + 1,
                 "wins": {**wins, winner_key: int(wins.get(winner_key, 0) or 0) + 1},
                 "side_history": {

@@ -767,7 +767,7 @@ def _delphi_convergence(turns: list[dict[str, Any]]) -> dict[str, Any]:
         distance = sum(
             abs(distributions[-1][label] - distributions[-2][label])
             for label in STANCE_LABELS
-        ) / max(1, len(STANCE_LABELS))
+        ) / 2
         convergence = 1 - distance
 
     return {

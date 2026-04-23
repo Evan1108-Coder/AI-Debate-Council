@@ -41,7 +41,7 @@ export function Sidebar({
         <div className="flex items-center justify-between gap-3">
           <div>
             <h1 className="text-lg font-semibold text-zinc-950">AI Debate Council</h1>
-            <p className="text-sm text-zinc-600">{sessions.length}/10 sessions</p>
+            <p className="text-sm text-zinc-600">{sessions.length}/{maxSessions} sessions</p>
           </div>
           <button
             type="button"

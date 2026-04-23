@@ -201,7 +201,7 @@ class Database:
             connection.close()
 
     def init(self) -> None:
-        with self.lock, self.session() as connection:
+        with self.lock, self.session(immediate=True) as connection:
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS app_metadata (
@@ -481,7 +481,9 @@ class Database:
                 "ALTER TABLE debates ADD COLUMN default_index INTEGER NOT NULL DEFAULT 0"
             )
         if "mode" not in debate_columns:
-            connection.execute("ALTER TABLE debates ADD COLUMN mode TEXT NOT NULL DEFAULT ''")
+            connection.execute(
+                "ALTER TABLE debates ADD COLUMN mode TEXT NOT NULL DEFAULT 'debate'"
+            )
         if "metadata" not in debate_columns:
             connection.execute("ALTER TABLE debates ADD COLUMN metadata TEXT NOT NULL DEFAULT '{}'")
 
@@ -489,20 +491,31 @@ class Database:
             "SELECT id, session_id, started_at FROM debates ORDER BY session_id, started_at ASC"
         ).fetchall()
         index_by_session: dict[str, int] = {}
-        ignored_roles = ("user", "assistant", "judge", "judge_assistant")
         for row in debate_rows:
             session_id = row["session_id"]
             index_by_session[session_id] = index_by_session.get(session_id, 0) + 1
             debate_index = index_by_session[session_id]
-            debater_count = connection.execute(
-                f"""
-                SELECT COUNT(*) AS total
-                FROM messages
-                WHERE debate_id = ?
-                  AND role NOT IN ({",".join("?" for _ in ignored_roles)})
-                """,
-                (row["id"], *ignored_roles),
-            ).fetchone()["total"]
+            role_counts = {
+                item["role"]: item["total"]
+                for item in connection.execute(
+                    """
+                    SELECT role, COUNT(*) AS total
+                    FROM messages
+                    WHERE debate_id = ?
+                    GROUP BY role
+                    """,
+                    (row["id"],),
+                ).fetchall()
+            }
+            roles = set(role_counts)
+            is_practice = bool(
+                roles & {"practice_user", "practice_debater", "debate_trainer"}
+            )
+            is_chat_only = bool(roles) and roles <= {"user", "assistant"}
+            inferred_mode = "practice" if is_practice else ("chat" if is_chat_only else "debate")
+            inferred_prefix = (
+                DEFAULT_PRACTICE_PREFIX if inferred_mode == "practice" else DEFAULT_DEBATE_PREFIX
+            )
             connection.execute(
                 """
                 UPDATE debates
@@ -510,14 +523,19 @@ class Database:
                     default_index = CASE WHEN default_index = 0 THEN ? ELSE default_index END,
                     mode = CASE
                         WHEN mode = '' THEN ?
+                        WHEN mode = 'chat' AND ? != 'chat' THEN ?
+                        WHEN mode NOT IN ('debate', 'chat', 'practice') THEN ?
                         ELSE mode
                     END
                 WHERE id = ?
                 """,
                 (
-                    f"{DEFAULT_DEBATE_PREFIX}{debate_index}",
+                    f"{inferred_prefix}{debate_index}",
                     debate_index,
-                    "debate" if debater_count > 0 else "chat",
+                    inferred_mode,
+                    inferred_mode,
+                    inferred_mode,
+                    inferred_mode,
                     row["id"],
                 ),
             )
@@ -593,6 +611,19 @@ class Database:
                 "SELECT value FROM app_metadata WHERE key = ?", (COUNCIL_SETTINGS_KEY,)
             ).fetchone()
             current = json.loads(row["value"] or "{}") if row else {}
+            if isinstance(cleaned.get("confirmation_preferences"), dict):
+                current_preferences = (
+                    current.get("confirmation_preferences")
+                    if isinstance(current.get("confirmation_preferences"), dict)
+                    else {}
+                )
+                cleaned = {
+                    **cleaned,
+                    "confirmation_preferences": {
+                        **current_preferences,
+                        **cleaned["confirmation_preferences"],
+                    },
+                }
             next_settings = self._normalize_council_settings({**current, **cleaned})
             connection.execute(
                 """
@@ -1199,7 +1230,7 @@ class Database:
         return normalized
 
     def _normalize_choice(self, value: object, choices: set[str], default: str) -> str:
-        cleaned = str(value)
+        cleaned = str(value).strip()
         return cleaned if cleaned in choices else default
 
     def rename_session(self, session_id: str, name: str) -> dict | None:
@@ -1274,8 +1305,12 @@ class Database:
         metadata: dict | None = None,
     ) -> dict:
         cleaned_mode = mode if mode in {"debate", "chat", "practice"} else "debate"
-        with self.lock, self.session() as connection:
+        with self.lock, self.session(immediate=True) as connection:
             now = utc_now()
+            if not connection.execute(
+                "SELECT id FROM sessions WHERE id = ?", (session_id,)
+            ).fetchone():
+                raise ValueError("SESSION_NOT_FOUND")
             debate_id = str(uuid4())
             if cleaned_mode in {"debate", "practice"}:
                 prefix = DEFAULT_PRACTICE_PREFIX if cleaned_mode == "practice" else DEFAULT_DEBATE_PREFIX
@@ -1356,7 +1391,7 @@ class Database:
             )
 
     def update_debate_metadata(self, debate_id: str, updates: dict) -> dict | None:
-        with self.lock, self.session() as connection:
+        with self.lock, self.session(immediate=True) as connection:
             row = connection.execute(
                 "SELECT * FROM debates WHERE id = ?", (debate_id,)
             ).fetchone()
@@ -1413,7 +1448,7 @@ class Database:
             return debate_row_to_dict(row)
 
     def get_active_practice_debate(self, session_id: str) -> dict | None:
-        with self.lock, self.session() as connection:
+        with self.lock, self.session(immediate=True) as connection:
             row = connection.execute(
                 """
                 SELECT *
@@ -1454,7 +1489,14 @@ class Database:
                 "UPDATE sessions SET updated_at = ? WHERE id = ?", (utc_now(), session_id)
             )
             row = connection.execute(
-                "SELECT * FROM debates WHERE id = ? AND session_id = ?",
+                """
+                SELECT *
+                FROM debates
+                WHERE id = ?
+                  AND session_id = ?
+                  AND mode IN ('debate', 'practice')
+                  AND hidden_at IS NULL
+                """,
                 (debate_id, session_id),
             ).fetchone()
             return debate_row_to_dict(row)
@@ -1493,7 +1535,7 @@ class Database:
         debate_cost_summary: dict | None = None,
         phase: dict | None = None,
     ) -> dict:
-        with self.lock, self.session() as connection:
+        with self.lock, self.session(immediate=True) as connection:
             sequence = (
                 connection.execute(
                     """
@@ -1552,6 +1594,24 @@ class Database:
                 ORDER BY sequence ASC
                 """,
                 (session_id,),
+            ).fetchall()
+            return [message_row_to_dict(row) or {} for row in rows]
+
+    def list_messages_for_debate(
+        self, session_id: str, debate_id: str, *, include_hidden: bool = False
+    ) -> list[dict]:
+        with self.lock, self.session() as connection:
+            visibility_clause = "" if include_hidden else "AND hidden_at IS NULL"
+            rows = connection.execute(
+                f"""
+                SELECT *
+                FROM messages
+                WHERE session_id = ?
+                  AND debate_id = ?
+                  {visibility_clause}
+                ORDER BY sequence ASC, created_at ASC
+                """,
+                (session_id, debate_id),
             ).fetchall()
             return [message_row_to_dict(row) or {} for row in rows]
 
@@ -1748,6 +1808,8 @@ class Database:
             params.append(session_id)
         if scope_clauses:
             clauses.append("(" + " OR ".join(scope_clauses) + ")")
+        elif not include_universal:
+            return []
         query = f"""
             SELECT *
             FROM agent_experience
@@ -1826,7 +1888,14 @@ class Database:
 
         with self.lock, self.session() as connection:
             row = connection.execute(
-                "SELECT * FROM debates WHERE id = ? AND session_id = ?",
+                """
+                SELECT *
+                FROM debates
+                WHERE id = ?
+                  AND session_id = ?
+                  AND mode IN ('debate', 'practice')
+                  AND hidden_at IS NULL
+                """,
                 (debate_id, session_id),
             ).fetchone()
             if not row:
@@ -1844,6 +1913,7 @@ class Database:
                 "created_at": now,
             }
             reviews.append(review)
+            reviews = reviews[-20:]
             metadata["verdict_reviews"] = reviews
             if action_value == "override":
                 metadata["user_verdict_override"] = {
@@ -1898,6 +1968,8 @@ class Database:
                 """,
                 (now, session_id),
             )
+            connection.execute("DELETE FROM post_debate_feedback WHERE session_id = ?", (session_id,))
+            connection.execute("DELETE FROM debate_intelligence WHERE session_id = ?", (session_id,))
             connection.execute(
                 "UPDATE sessions SET updated_at = ? WHERE id = ?", (now, session_id)
             )

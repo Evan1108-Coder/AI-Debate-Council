@@ -1,7 +1,13 @@
 import unittest
 import json
 
-from backend.app.analytics import _infer_debate_winner, analyze_debate, format_analytics_report
+from backend.app.analytics import (
+    _delphi_convergence,
+    _infer_debate_winner,
+    _win_rate_by_team,
+    analyze_debate,
+    format_analytics_report,
+)
 
 
 class DebateAnalyticsTests(unittest.TestCase):
@@ -174,6 +180,30 @@ class DebateAnalyticsTests(unittest.TestCase):
         self.assertGreaterEqual(len(analysis["attention"]["top_terms"]), 1)
         self.assertEqual(analysis["stance"]["by_role"]["Pro Advocate"], "support")
         self.assertEqual(analysis["stance"]["by_role"]["Con Advocate"], "oppose")
+
+    def test_delphi_convergence_uses_l1_distance_normalized_by_two(self) -> None:
+        result = _delphi_convergence(
+            [
+                {"round": 1, "stance": "support", "confidence": 1.0, "credibility": 1.0},
+                {"round": 2, "stance": "oppose", "confidence": 1.0, "credibility": 1.0},
+            ]
+        )
+
+        self.assertEqual(result["convergence"], 0.0)
+
+    def test_win_rate_by_team_honors_user_override(self) -> None:
+        result = _win_rate_by_team(
+            [
+                {
+                    "status": "completed",
+                    "judge_summary": "WINNER: Pro",
+                    "metadata": {"user_verdict_override": {"winner": "con"}},
+                }
+            ]
+        )
+
+        self.assertEqual(result["con"], 1)
+        self.assertEqual(result["pro"], 0)
 
 
 if __name__ == "__main__":

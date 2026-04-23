@@ -23,12 +23,13 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   let response: Response;
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const hasBody = options.body !== undefined && options.body !== null;
   try {
     response = await fetch(`${API_BASE}${path}`, {
       ...options,
       signal: options.signal ?? controller.signal,
       headers: {
-        "Content-Type": "application/json",
+        ...(hasBody ? { "Content-Type": "application/json" } : {}),
         ...(options.headers ?? {})
       }
     });

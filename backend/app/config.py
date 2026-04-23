@@ -7,10 +7,10 @@ from dotenv import load_dotenv
 ROOT_DIR = Path(__file__).resolve().parents[2]
 BACKEND_DIR = ROOT_DIR / "backend"
 
-# The root project .env should be authoritative for local development. This prevents
-# an old shell-level API key from silently unlocking a provider the user left blank.
+# Root .env overrides shell variables. backend/.env then overrides root .env for
+# backend-specific local setups, matching ENVREADME.md.
 load_dotenv(ROOT_DIR / ".env", override=True)
-load_dotenv(BACKEND_DIR / ".env", override=False)
+load_dotenv(BACKEND_DIR / ".env", override=True)
 
 
 class Settings:

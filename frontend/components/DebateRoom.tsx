@@ -674,6 +674,9 @@ function MessageCosts({
   const isDebateMessage =
     message.role === "judge" ||
     message.role === "judge_assistant" ||
+    message.role === "judge_panelist" ||
+    message.role === "practice_debater" ||
+    message.role === "debate_trainer" ||
     message.role.startsWith("pro_") ||
     message.role.startsWith("con_");
 
@@ -971,7 +974,7 @@ function PhasePanel({ phase }: { phase: NonNullable<DebateAnalytics["phase"]> })
               <div className="min-w-0 flex-1">
                 <p className="font-medium text-zinc-950">{item.title}</p>
                 <p className="text-xs text-zinc-600">
-                  {item.speaker} · {item.kind.replace("_", " ")}
+                  {item.speaker} · {item.kind.replaceAll("_", " ")}
                 </p>
               </div>
             </div>
@@ -1200,6 +1203,7 @@ function IntelligencePanel({
         </Panel>
 
         <VerdictReviewPanel
+          key={`verdict-${debate.id}`}
           records={intelligence.verdict_reviews}
           settings={settings}
           debate={debate}
@@ -1253,6 +1257,7 @@ function IntelligencePanel({
         </div>
 
         <FeedbackQuestionsPanel
+          key={`feedback-${debate.id}`}
           questions={intelligence.feedback_questions}
           onFeedbackSubmit={onFeedbackSubmit}
         />
@@ -1284,6 +1289,14 @@ function VerdictReviewPanel({
   const [error, setError] = useState<string | null>(null);
   const allowed = settings?.judging_settings?.allow_user_verdict_challenge ?? true;
   const completed = debate.status === "completed";
+
+  useEffect(() => {
+    setAction("challenge");
+    setWinner("unclear");
+    setNote("");
+    setSaved(false);
+    setError(null);
+  }, [debate.id]);
 
   const submit = async () => {
     if (!completed || !allowed || saving) {
@@ -1453,8 +1466,10 @@ function CouncilSettingsPanel({
   const [profileResetOpen, setProfileResetOpen] = useState(false);
   const [confirmation, setConfirmation] = useState("");
   const [profileConfirmation, setProfileConfirmation] = useState("");
-  const [notice, setNotice] = useState<string | null>(null);
+  const [resetNotice, setResetNotice] = useState<string | null>(null);
+  const [profileNotice, setProfileNotice] = useState<string | null>(null);
   const [resetError, setResetError] = useState<string | null>(null);
+  const [profileResetError, setProfileResetError] = useState<string | null>(null);
   const [isResetting, setIsResetting] = useState(false);
   const [isProfileResetting, setIsProfileResetting] = useState(false);
 
@@ -1468,11 +1483,11 @@ function CouncilSettingsPanel({
 
   const handleReset = async () => {
     setResetError(null);
-    setNotice(null);
+    setResetNotice(null);
     setIsResetting(true);
     try {
       const result = await onResetUniversalIdentities(confirmation);
-      setNotice(`Reset complete. ${result.deleted} universal identity record(s) were hidden.`);
+      setResetNotice(`Reset complete. ${result.deleted} universal identity record(s) were hidden.`);
       setConfirmation("");
       setResetOpen(false);
     } catch (exc) {
@@ -1483,16 +1498,16 @@ function CouncilSettingsPanel({
   };
 
   const handleProfileReset = async () => {
-    setResetError(null);
-    setNotice(null);
+    setProfileResetError(null);
+    setProfileNotice(null);
     setIsProfileResetting(true);
     try {
       await onResetUserDebateProfile(profileConfirmation);
-      setNotice("User debate profile reset complete.");
+      setProfileNotice("User debate profile reset complete.");
       setProfileConfirmation("");
       setProfileResetOpen(false);
     } catch (exc) {
-      setResetError(exc instanceof Error ? exc.message : "Could not reset user debate profile.");
+      setProfileResetError(exc instanceof Error ? exc.message : "Could not reset user debate profile.");
     } finally {
       setIsProfileResetting(false);
     }
@@ -1604,7 +1619,7 @@ function CouncilSettingsPanel({
               type="button"
               onClick={() => {
                 setResetOpen(true);
-                setNotice(null);
+                setResetNotice(null);
                 setResetError(null);
               }}
               className="mt-3 rounded-md border border-red-300 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-50"
@@ -1646,7 +1661,7 @@ function CouncilSettingsPanel({
               </div>
             </div>
           )}
-          {notice ? <p className="mt-3 text-sm text-emerald-700">{notice}</p> : null}
+          {resetNotice ? <p className="mt-3 text-sm text-emerald-700">{resetNotice}</p> : null}
         </Panel>
 
         <Panel title="Reset user debate profile">
@@ -1659,8 +1674,8 @@ function CouncilSettingsPanel({
               type="button"
               onClick={() => {
                 setProfileResetOpen(true);
-                setNotice(null);
-                setResetError(null);
+                setProfileNotice(null);
+                setProfileResetError(null);
               }}
               className="mt-3 rounded-md border border-red-300 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-50"
             >
@@ -1677,7 +1692,7 @@ function CouncilSettingsPanel({
                 className="mt-2 h-10 w-full rounded-md border border-red-300 bg-white px-3 text-sm"
                 placeholder="RESET USER DEBATE PROFILE"
               />
-              {resetError ? <p className="mt-2 text-sm text-red-800">{resetError}</p> : null}
+              {profileResetError ? <p className="mt-2 text-sm text-red-800">{profileResetError}</p> : null}
               <div className="mt-3 flex flex-wrap gap-2">
                 <button
                   type="button"
@@ -1692,7 +1707,7 @@ function CouncilSettingsPanel({
                   onClick={() => {
                     setProfileResetOpen(false);
                     setProfileConfirmation("");
-                    setResetError(null);
+                    setProfileResetError(null);
                   }}
                   className="rounded-md border border-zinc-300 px-4 py-2 text-sm font-semibold text-zinc-800 hover:bg-zinc-100"
                 >
@@ -1701,6 +1716,7 @@ function CouncilSettingsPanel({
               </div>
             </div>
           )}
+          {profileNotice ? <p className="mt-3 text-sm text-emerald-700">{profileNotice}</p> : null}
         </Panel>
       </div>
     </section>
@@ -2034,7 +2050,14 @@ function SettingsPanel({
     }
     const markdown = exportAsMarkdown(payload);
     if (format === "PDF") {
-      exportPrintablePdf(markdown, `${session.name}${debate ? ` - ${debate.name}` : ""}`);
+      const opened = exportPrintablePdf(markdown, `${session.name}${debate ? ` - ${debate.name}` : ""}`);
+      if (!opened) {
+        downloadTextFile(
+          `${safeFileStem(session.name)}-${debate ? safeFileStem(debate.name) : "chat"}.md`,
+          markdown,
+          "text/markdown"
+        );
+      }
       return;
     }
     downloadTextFile(
@@ -3002,7 +3025,17 @@ function LineChart({ history }: { history: DebateAnalytics[] }) {
           Y-Axis: Bayesian Probability (%)
         </text>
         {labels.map((label) => (
-          <path key={label} d={pathFor(label)} fill="none" stroke={colors[label]} strokeWidth={3} />
+          <g key={label}>
+            <path d={pathFor(label)} fill="none" stroke={colors[label]} strokeWidth={3} />
+            {history.length === 1 ? (
+              <circle
+                cx={padLeft}
+                cy={height - padBottom - (history[0].bayesian.probabilities[label] ?? 0) * plotHeight}
+                r={4}
+                fill={colors[label]}
+              />
+            ) : null}
+          </g>
         ))}
       </svg>
       <div className="flex gap-4 text-xs">
@@ -3164,7 +3197,7 @@ function ToggleSetting({
 }
 
 function MarkdownText({ text }: { text: string }) {
-  const lines = text.split(/\n+/);
+  const lines = text.split(/\n/);
   const elements: ReactNode[] = [];
   let listItems: ReactNode[] = [];
   let ordered = false;
@@ -3223,7 +3256,7 @@ function MarkdownText({ text }: { text: string }) {
 
 function renderInline(text: string) {
   const segments: ReactNode[] = [];
-  const pattern = /(\*\*.+?\*\*|\*(?!\s)[^*].+?\*)/g;
+  const pattern = /(\*\*[^*]+?\*\*|\*(?!\s)[^*]+?\*)/g;
   let lastIndex = 0;
   let match: RegExpExecArray | null;
   let index = 0;
@@ -3252,8 +3285,9 @@ function estimateTokens(text: string) {
   if (!text.trim()) {
     return 0;
   }
-  const cjkChars = (text.match(/[\u3400-\u9fff\uf900-\ufaff]/g) ?? []).length;
-  const withoutCjk = text.replace(/[\u3400-\u9fff\uf900-\ufaff]/g, " ");
+  const cjkPattern = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af\u{20000}-\u{2fa1f}]/gu;
+  const cjkChars = (text.match(cjkPattern) ?? []).length;
+  const withoutCjk = text.replace(cjkPattern, " ");
   const wordish = (withoutCjk.match(/[A-Za-z0-9_]+|[^\sA-Za-z0-9_]/g) ?? []).length;
   return Math.max(1, Math.ceil(cjkChars * 1.6 + wordish * 1.3));
 }
@@ -3287,7 +3321,7 @@ function safeFileStem(value: string) {
   return value
     .trim()
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
     .replace(/^-+|-+$/g, "")
     || "debate-export";
 }
@@ -3305,7 +3339,7 @@ function downloadTextFile(filename: string, content: string, mimeType: string) {
 function exportPrintablePdf(markdown: string, title: string) {
   const printWindow = window.open("", "_blank", "noopener,noreferrer,width=960,height=720");
   if (!printWindow) {
-    return;
+    return false;
   }
   const html = `
     <!doctype html>
@@ -3329,6 +3363,7 @@ function exportPrintablePdf(markdown: string, title: string) {
   printWindow.document.close();
   printWindow.focus();
   printWindow.print();
+  return true;
 }
 
 function escapeHtml(value: string) {

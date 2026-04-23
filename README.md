@@ -406,10 +406,12 @@ Team role settings (Advocate, Rebuttal Critic, etc.) apply to both the Pro and C
 | `PATCH` | `/api/sessions/{session_id}/settings` | Update session settings. Body: partial settings object. |
 | `GET` | `/api/sessions/{session_id}/analytics?debate_id=...` | Get analytics for a session's latest or specified debate. |
 | `GET` | `/api/sessions/{session_id}/intelligence?debate_id=...` | Get Claim Ledger, Challenge Tracker, Evidence Ledger, Judge Scorecard, team rooms, and verdict review records. |
+| `GET` | `/api/sessions/{session_id}/practice-state` | Get whether an AI vs Human practice debate is currently active in the session. |
 | `POST` | `/api/sessions/{session_id}/debates/{debate_id}/feedback` | Save optional post-debate user feedback for future experience records. |
 | `POST` | `/api/sessions/{session_id}/debates/{debate_id}/verdict-review` | Save a verdict challenge or winner override. |
 | `GET` | `/api/council-settings` | Get universal Council Settings. |
 | `PATCH` | `/api/council-settings` | Update universal Council Settings. |
+| `POST` | `/api/council-settings/reset-agent-experience` | Reset universal agent identity records with confirmation. |
 | `GET` | `/api/user-debate-profile` | Get the AI vs Human Debate Training profile. |
 | `POST` | `/api/user-debate-profile/reset` | Reset the user debate profile with confirmation. |
 | `POST` | `/api/runtime-diary` | Record a runtime diary entry. Body: `{"source": "...", "event": "...", "detail": "...", "session_id": "..."}`. |
