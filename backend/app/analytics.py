@@ -14,6 +14,8 @@ PRO_WIN_ALIASES = (
     "pro",
     "pro team",
     "pro advocate",
+    "pro case",
+    "pro side",
     "affirmative",
     "supporting side",
     "supporting team",
@@ -23,6 +25,8 @@ CON_WIN_ALIASES = (
     "con",
     "con team",
     "con advocate",
+    "con case",
+    "con side",
     "negative",
     "opposing side",
     "opposing team",
@@ -38,6 +42,7 @@ WIN_SIGNAL_PATTERNS = (
     r"\bbetter\s+case\b",
     r"\bwinning\s+position\b",
     r"\btakes?\s+the\s+debate\b",
+    r"\bwins?\s+the\s+debate\b",
     r"\bcomes?\s+out\s+ahead\b",
     r"\bi\s+side\s+with\b",
     r"\bfavors?\b",
@@ -319,6 +324,14 @@ def _win_rate_by_team(debates: list[dict[str, Any]]) -> dict[str, Any]:
 def _infer_debate_winner(summary: str) -> str:
     normalized = _normalize_winner_text(summary)
     if not normalized:
+        return "unclear"
+    winner_header = re.search(r"\bwinner:\s*(pro|con|affirmative|negative|unclear)\b", normalized)
+    if winner_header:
+        token = winner_header.group(1)
+        if token in {"pro", "affirmative"}:
+            return "pro"
+        if token in {"con", "negative"}:
+            return "con"
         return "unclear"
     sentences = [
         sentence.strip()
@@ -740,7 +753,7 @@ def _delphi_convergence(turns: list[dict[str, Any]]) -> dict[str, Any]:
         distance = sum(
             abs(distributions[-1][label] - distributions[-2][label])
             for label in STANCE_LABELS
-        ) / 2
+        ) / max(1, len(STANCE_LABELS))
         convergence = 1 - distance
 
     return {

@@ -15,23 +15,34 @@ export const API_BASE =
 export const WS_BASE =
   process.env.NEXT_PUBLIC_WS_URL?.replace(/\/$/, "") ??
   API_BASE.replace(/^http/, "ws");
+const REQUEST_TIMEOUT_MS = 15000;
 
 async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
   let response: Response;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   try {
     response = await fetch(`${API_BASE}${path}`, {
       ...options,
+      signal: options.signal ?? controller.signal,
       headers: {
         "Content-Type": "application/json",
         ...(options.headers ?? {})
       }
     });
   } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      throw new Error(
+        `Backend request timed out after ${REQUEST_TIMEOUT_MS / 1000} seconds at ${API_BASE}.`
+      );
+    }
     const message =
       error instanceof Error && error.message !== "Failed to fetch" ? ` ${error.message}` : "";
     throw new Error(
       `Backend is not reachable at ${API_BASE}.${message} Start the FastAPI server on port 8000, then try again.`
     );
+  } finally {
+    clearTimeout(timeout);
   }
 
   if (!response.ok) {
@@ -91,6 +102,10 @@ export function renameSession(sessionId: string, name: string) {
 
 export function deleteSession(sessionId: string) {
   return request<void>(`/api/sessions/${sessionId}`, { method: "DELETE" });
+}
+
+export function deleteAllSessions() {
+  return request<{ deleted: number }>("/api/sessions", { method: "DELETE" });
 }
 
 export function clearSessionHistory(sessionId: string) {

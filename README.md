@@ -42,7 +42,7 @@ The backend is Python 3.13, FastAPI, SQLite, WebSockets, and LiteLLM. The fronte
 ### Model Support
 
 - **21 models across 6 providers**: OpenAI, Anthropic, Google, Groq (Llama), MiniMax, and Moonshot.
-- **Automatic model detection**: Add a provider API key to `.env` and all models from that provider appear in the dropdown. No model names go in `.env`.
+- **Automatic model detection**: Add a direct provider API key to `.env` and all models from that provider appear in the dropdown. No model names go in `.env`.
 - **Per-agent model overrides**: Each role (Advocate, Rebuttal Critic, etc.) can use a different model, or fall back to the session's Overall Model.
 - **Mock mode**: Set `MOCK_LLM_RESPONSES=true` to test the full UI flow without real API calls.
 
@@ -57,7 +57,7 @@ The backend is Python 3.13, FastAPI, SQLite, WebSockets, and LiteLLM. The fronte
 
 ### Cost Tracking
 
-- **Estimated API cost per debate**: The backend tracks token usage for every model call and estimates costs using built-in price tables for 20+ models.
+- **Estimated API cost per debate**: The backend tracks token usage for every model call and estimates costs using live OpenRouter pricing when a supported model can be matched there, with a local fallback table when live pricing is unavailable.
 - **9 currencies**: USD, CNY, HKD, EUR, JPY, GBP, AUD, CAD, SGP. Currency is selectable per chat in Chat Settings.
 - **Cost summaries**: Council Assistant messages show their own estimated cost. Debate turns store individual `cost_summary` for per-turn analytics, and the Judge message additionally stores a `debate_cost_summary` containing the overall debate total.
 - **CostBox display**: When "Show Money Cost" is enabled in Chat Settings, Council Assistant messages display their own estimated cost. In debate mode, the Judge message shows the overall debate cost by default (via `debate_cost_summary`). Turn-by-turn debate costs appear only when "Show Every Message Cost In Debate" is enabled. An optional per-model breakdown is available via "Show Model Costs".
@@ -178,7 +178,7 @@ The backend is a single Python process. All state lives in SQLite. The active-de
 
 No model names belong in `.env`. Add only provider API keys. The app detects which models are available by checking which API key environment variables are present.
 
-One provider key unlocks every model listed for that provider. For example, `OPENAI_API_KEY` unlocks all four OpenAI models. The backend has a built-in `MODEL_MAP` in `backend/app/model_registry.py` that already knows every model name, provider, and LiteLLM routing string.
+One provider key unlocks every model listed for that provider. For example, `OPENAI_API_KEY` unlocks all four OpenAI models. The backend uses direct provider APIs only and has a built-in `MODEL_MAP` in `backend/app/model_registry.py` that already knows every model name, provider, and LiteLLM routing string.
 
 `GET /api/models` returns a `models` list containing only unlocked models. The frontend uses that list for all dropdowns. If no provider keys are set, the real model dropdown is empty and debates cannot start (unless mock mode is enabled).
 

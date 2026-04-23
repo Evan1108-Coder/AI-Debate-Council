@@ -8,6 +8,7 @@ import {
   clearSessionHistory,
   clearSessionMemory,
   createSession,
+  deleteAllSessions,
   deleteDebateStatistics,
   deleteSession,
   getCouncilSettings,
@@ -79,6 +80,8 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ChatSession | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteAllOpen, setDeleteAllOpen] = useState(false);
+  const [deleteAllError, setDeleteAllError] = useState<string | null>(null);
   const [clearTarget, setClearTarget] = useState<ClearTarget | null>(null);
   const [clearError, setClearError] = useState<string | null>(null);
   const [deleteDebateTarget, setDeleteDebateTarget] = useState<DebateDeleteTarget | null>(null);
@@ -86,10 +89,12 @@ export default function Home() {
   const [renamingSessionId, setRenamingSessionId] = useState<string | null>(null);
   const [renamingDebateId, setRenamingDebateId] = useState<string | null>(null);
   const [deletingSessionId, setDeletingSessionId] = useState<string | null>(null);
+  const [deletingAllSessions, setDeletingAllSessions] = useState(false);
   const [deletingDebateId, setDeletingDebateId] = useState<string | null>(null);
   const [clearingSessionId, setClearingSessionId] = useState<string | null>(null);
   const socketRefs = useRef<Record<string, WebSocket>>({});
   const retryTimerRefs = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
+  const modelBySessionRef = useRef<Record<string, string>>({});
 
   const selectedSession = sessions.find((session) => session.id === selectedId) ?? null;
   const selectedMessages = selectedId ? messagesBySession[selectedId] ?? [] : [];
@@ -110,6 +115,10 @@ export default function Home() {
   const selectedAnalyticsHistory = selectedId ? analyticsHistoryBySession[selectedId] ?? [] : [];
   const selectedRunning = selectedId ? Boolean(runningBySession[selectedId]) : false;
   const selectedTeamPreparing = selectedId ? Boolean(teamPreparingBySession[selectedId]) : false;
+
+  useEffect(() => {
+    modelBySessionRef.current = modelBySession;
+  }, [modelBySession]);
 
   const refreshSessions = useCallback(async () => {
     const nextSessions = await listSessions();
@@ -306,7 +315,6 @@ export default function Home() {
     }
 
     const target = deleteTarget;
-    const nextSessions = sessions.filter((session) => session.id !== target.id);
     setDeletingSessionId(target.id);
     setDeleteError(null);
     setError(null);
@@ -316,7 +324,7 @@ export default function Home() {
       clearSocketRetry(target.id);
       socketRefs.current[target.id]?.close();
       delete socketRefs.current[target.id];
-      setSessions(nextSessions);
+      const sessionList = await refreshSessions();
       setMessagesBySession((current) => removeKey(current, target.id));
       setPartialBySession((current) => removeKey(current, target.id));
       setDraftBySession((current) => removeKey(current, target.id));
@@ -332,7 +340,7 @@ export default function Home() {
       setRunningBySession((current) => removeKey(current, target.id));
       setTeamPreparingBySession((current) => removeKey(current, target.id));
       if (selectedId === target.id) {
-        setSelectedId(nextSessions[0]?.id ?? null);
+        setSelectedId(sessionList[0]?.id ?? null);
       }
       setDeleteTarget(null);
     } catch (exc) {
@@ -341,6 +349,48 @@ export default function Home() {
       setError(message);
     } finally {
       setDeletingSessionId(null);
+    }
+  }
+
+  async function handleConfirmDeleteAll() {
+    if (deletingAllSessions) {
+      return;
+    }
+
+    setDeletingAllSessions(true);
+    setDeleteAllError(null);
+    setError(null);
+
+    try {
+      await deleteAllSessions();
+      Object.keys(retryTimerRefs.current).forEach((sessionId) => clearSocketRetry(sessionId));
+      Object.values(socketRefs.current).forEach((socket) => socket.close());
+      socketRefs.current = {};
+      modelBySessionRef.current = {};
+      setSessions([]);
+      setSelectedId(null);
+      setMessagesBySession({});
+      setPartialBySession({});
+      setDraftBySession({});
+      setSettingsBySession({});
+      setModelBySession({});
+      setStatusBySession({});
+      setAssignmentsBySession({});
+      setDebatesBySession({});
+      setSelectedDebateBySession({});
+      setAnalyticsBySession({});
+      setIntelligenceBySession({});
+      setAnalyticsHistoryBySession({});
+      setRunningBySession({});
+      setTeamPreparingBySession({});
+      setDeleteAllOpen(false);
+      await refreshSessions();
+    } catch (exc) {
+      const message = exc instanceof Error ? exc.message : "Could not delete all chats.";
+      setDeleteAllError(message);
+      setError(message);
+    } finally {
+      setDeletingAllSessions(false);
     }
   }
 
@@ -620,7 +670,8 @@ export default function Home() {
           [sessionId]: `Connection failed. Retrying (${attempt + 1}/${WEBSOCKET_CONNECT_RETRIES})...`
         }));
         retryTimerRefs.current[sessionId] = setTimeout(() => {
-          openInteractionSocket(sessionId, content, modelName, attempt + 1);
+          const retryModelName = modelBySessionRef.current[sessionId] || modelName;
+          openInteractionSocket(sessionId, content, retryModelName, attempt + 1);
         }, WEBSOCKET_RETRY_DELAY_MS);
         return;
       }
@@ -824,6 +875,10 @@ export default function Home() {
         selectedId={selectedId}
         maxSessions={MAX_SESSIONS}
         onNew={handleNewSession}
+        onDeleteAll={() => {
+          setDeleteAllError(null);
+          setDeleteAllOpen(true);
+        }}
         onSelect={handleSelect}
         onCouncilSettings={() => {
           setShowCouncilSettings(true);
@@ -886,6 +941,17 @@ export default function Home() {
           error={deleteError}
           onCancel={() => setDeleteTarget(null)}
           onConfirm={handleConfirmDelete}
+        />
+      ) : null}
+      {deleteAllOpen ? (
+        <ConfirmDialog
+          title="Delete all chats"
+          body="Delete every chat session? Messages, debates, per-chat settings, and chat-scoped memories will be removed. Council Settings and universal experience will stay."
+          confirmLabel="Delete All Chats"
+          isWorking={deletingAllSessions}
+          error={deleteAllError}
+          onCancel={() => setDeleteAllOpen(false)}
+          onConfirm={handleConfirmDeleteAll}
         />
       ) : null}
       {clearTarget ? (

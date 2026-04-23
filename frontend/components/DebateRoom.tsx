@@ -654,7 +654,14 @@ function CostBox({
         <div className="mt-2 divide-y divide-zinc-200">
           {summary.models.map((item) => (
             <div key={item.model} className="flex flex-wrap justify-between gap-2 py-1">
-              <span className="font-medium text-zinc-800">{item.model}</span>
+              <span className="font-medium text-zinc-800">
+                {item.model}
+                {item.pricing_live ? (
+                  <span className="ml-2 rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-800">
+                    Live
+                  </span>
+                ) : null}
+              </span>
               <span>
                 {formatCost(item.cost, summary.currency)} · {item.calls} call(s) · {item.input_tokens} in / {item.output_tokens} out
               </span>
@@ -663,8 +670,17 @@ function CostBox({
         </div>
       ) : null}
       <p className="mt-1 text-[11px] text-zinc-500">
-        Estimated from visible text tokens and provider list prices; final provider billing can differ.
+        Estimated from visible text tokens. {summary.rate_source}
       </p>
+      {summary.warnings && summary.warnings.length > 0 ? (
+        <div className="mt-2 space-y-1">
+          {summary.warnings.map((warning, index) => (
+            <p key={index} className="text-[11px] text-amber-700">
+              {warning}
+            </p>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -2371,16 +2387,22 @@ function Legend({ color, label, value }: { color: string; label: string; value: 
 function LineChart({ history }: { history: DebateAnalytics[] }) {
   const labels = ["support", "oppose", "mixed"] as const;
   const colors = { support: "#047857", oppose: "#dc2626", mixed: "#0891b2" };
-  const width = 620;
-  const height = 220;
-  const pad = 28;
+  const width = 640;
+  const height = 240;
+  const padLeft = 44;
+  const padRight = 20;
+  const padTop = 20;
+  const padBottom = 36;
   const latest = history[history.length - 1];
+  const plotWidth = width - padLeft - padRight;
+  const plotHeight = height - padTop - padBottom;
+  const xTicks = history.map((_, index) => index + 1);
 
   const pathFor = (label: (typeof labels)[number]) =>
     history
       .map((item, index) => {
-        const x = pad + (index / Math.max(1, history.length - 1)) * (width - pad * 2);
-        const y = height - pad - (item.bayesian.probabilities[label] ?? 0) * (height - pad * 2);
+        const x = padLeft + (index / Math.max(1, history.length - 1)) * plotWidth;
+        const y = height - padBottom - (item.bayesian.probabilities[label] ?? 0) * plotHeight;
         return `${index === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
       })
       .join(" ");
@@ -2388,20 +2410,26 @@ function LineChart({ history }: { history: DebateAnalytics[] }) {
   return (
     <div className="overflow-x-auto">
       <svg viewBox={`0 0 ${width} ${height}`} className="h-60 min-w-[520px]">
-        <line x1={pad} y1={height - pad} x2={width - pad} y2={height - pad} stroke="#d4d4d8" />
-        <line x1={pad} y1={pad} x2={pad} y2={height - pad} stroke="#d4d4d8" />
+        <line
+          x1={padLeft}
+          y1={height - padBottom}
+          x2={width - padRight}
+          y2={height - padBottom}
+          stroke="#d4d4d8"
+        />
+        <line x1={padLeft} y1={padTop} x2={padLeft} y2={height - padBottom} stroke="#d4d4d8" />
         {[0.25, 0.5, 0.75].map((tick) => (
           <g key={tick}>
             <line
-              x1={pad}
-              y1={height - pad - tick * (height - pad * 2)}
-              x2={width - pad}
-              y2={height - pad - tick * (height - pad * 2)}
+              x1={padLeft}
+              y1={height - padBottom - tick * plotHeight}
+              x2={width - padRight}
+              y2={height - padBottom - tick * plotHeight}
               stroke="#f4f4f5"
             />
             <text
-              x={pad - 8}
-              y={height - pad - tick * (height - pad * 2) + 4}
+              x={padLeft - 10}
+              y={height - padBottom - tick * plotHeight + 4}
               textAnchor="end"
               fontSize="10"
               fill="#71717a"
@@ -2410,18 +2438,35 @@ function LineChart({ history }: { history: DebateAnalytics[] }) {
             </text>
           </g>
         ))}
-        <text x={width / 2} y={height - 4} textAnchor="middle" fontSize="11" fill="#52525b">
-          X-axis unit: analytics update number
+        {xTicks.map((tick, index) => {
+          const x = padLeft + (index / Math.max(1, history.length - 1)) * plotWidth;
+          return (
+            <g key={tick}>
+              <line
+                x1={x}
+                y1={height - padBottom}
+                x2={x}
+                y2={height - padBottom + 4}
+                stroke="#a1a1aa"
+              />
+              <text x={x} y={height - padBottom + 16} textAnchor="middle" fontSize="10" fill="#71717a">
+                {tick}
+              </text>
+            </g>
+          );
+        })}
+        <text x={width / 2} y={height - 6} textAnchor="middle" fontSize="11" fill="#52525b">
+          X-Axis: Analytics Update Number
         </text>
         <text
-          x={12}
+          x={16}
           y={height / 2}
           textAnchor="middle"
           fontSize="11"
           fill="#52525b"
-          transform={`rotate(-90 12 ${height / 2})`}
+          transform={`rotate(-90 16 ${height / 2})`}
         >
-          Y-axis unit: probability (%)
+          Y-Axis: Bayesian Probability (%)
         </text>
         {labels.map((label) => (
           <path key={label} d={pathFor(label)} fill="none" stroke={colors[label]} strokeWidth={3} />

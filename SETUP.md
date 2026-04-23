@@ -67,7 +67,7 @@ OPENAI_API_KEY=sk-your-key-here
 ANTHROPIC_API_KEY=sk-ant-your-key-here
 ```
 
-One provider key unlocks all models from that provider. For example, one `OPENAI_API_KEY` unlocks `gpt-5.4-pro`, `gpt-5.4-mini`, `gpt-4o`, and `gpt-4o-mini`. The frontend dropdown shows only unlocked models.
+One provider key unlocks all models from that provider. For example, one `OPENAI_API_KEY` unlocks `gpt-5.4-pro`, `gpt-5.4-mini`, `gpt-4o`, and `gpt-4o-mini`. The frontend dropdown shows only unlocked models, and the app talks to those providers directly.
 
 **Do not put model names in `.env`.** The app detects models automatically from your API keys.
 

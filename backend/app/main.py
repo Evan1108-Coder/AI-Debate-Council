@@ -8,11 +8,9 @@ from .config import settings
 from .database import Database
 from .debate import ClientDisconnectedError, DebateError, DebateManager
 from .model_registry import (
-    GITHUB_MODELS_API_KEY_ENV,
     PROVIDER_ORDER,
     SUPPORTED_MODELS,
     available_models,
-    github_catalog_error,
     verify_models_runtime,
 )
 from .runtime_diary import runtime_diary
@@ -80,9 +78,6 @@ def health() -> dict:
 @app.get("/api/models")
 async def models() -> dict:
     configured = available_models()
-    candidate_route_sources = {
-        model.name: model.route.source if model.route is not None else None for model in configured
-    }
     verification = await verify_models_runtime(configured)
     unlocked_models = []
     for model in configured:
@@ -103,7 +98,6 @@ async def models() -> dict:
                 "api_key_env": "MOCK_LLM_RESPONSES",
                 "litellm_model": "mock-debate-model",
                 "configured": True,
-                "route_source": "mock",
                 "availability_reason": None,
             },
         )
@@ -118,9 +112,6 @@ async def models() -> dict:
             if verification.get(model.name, None) and verification[model.name].available
         ]
         direct_configured = any(model.direct_api_key for model in provider_models)
-        github_configured = any(
-            candidate_route_sources.get(model.name) == "github_models" for model in provider_models
-        )
         first_reason = next(
             (
                 verification[model.name].reason
@@ -132,27 +123,17 @@ async def models() -> dict:
         if verified_models:
             status_label = f"{len(verified_models)} unlocked"
             status_reason = None
-        elif direct_configured or github_configured:
+        elif direct_configured:
             status_label = "Unavailable"
             status_reason = first_reason or "No working model from this provider passed the live check."
         else:
             status_label = "Locked"
-            status_reason = github_catalog_error() if not direct_configured else None
-            if not status_reason:
-                status_reason = (
-                    f"Add {provider_models[0].api_key_env} to unlock these models."
-                    if not github_configured
-                    else f"Add {GITHUB_MODELS_API_KEY_ENV} to unlock GitHub-routed models."
-                )
+            status_reason = f"Add {provider_models[0].api_key_env} to unlock these models."
         providers.append(
             {
                 "provider": provider,
                 "provider_label": provider_models[0].provider_label,
-                "api_key_env": (
-                    provider_models[0].api_key_env
-                    if direct_configured or not github_configured
-                    else GITHUB_MODELS_API_KEY_ENV
-                ),
+                "api_key_env": provider_models[0].api_key_env,
                 "configured": bool(verified_models),
                 "unlocked_model_count": len(verified_models),
                 "total_model_count": len(provider_models),
@@ -163,11 +144,11 @@ async def models() -> dict:
         )
     availability_notice = None
     if not unlocked_models and not include_mock:
-        if any(model.route is not None for model in configured):
+        if configured:
             reasons = [reason for reason in (provider["status_reason"] for provider in providers) if reason]
             availability_notice = reasons[0] if reasons else "No working models passed the live check."
         else:
-            availability_notice = "No working API keys or supported model routes are available yet."
+            availability_notice = "No working API keys are available yet."
     return {
         "models": unlocked_models,
         "providers": providers,
@@ -229,6 +210,12 @@ def create_session() -> dict:
                 detail=f"Only {settings.max_sessions} chat sessions are allowed at a time.",
             ) from exc
         raise
+
+
+@app.delete("/api/sessions")
+def delete_all_sessions() -> dict:
+    deleted = db.delete_all_sessions()
+    return {"deleted": deleted}
 
 
 @app.patch("/api/sessions/{session_id}", response_model=ChatSession)

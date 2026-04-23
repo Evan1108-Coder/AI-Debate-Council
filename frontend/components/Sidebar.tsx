@@ -7,6 +7,7 @@ type SidebarProps = {
   selectedId: string | null;
   maxSessions: number;
   onNew: () => void;
+  onDeleteAll: () => void;
   onSelect: (id: string) => void;
   onCouncilSettings: () => void;
   councilSettingsActive: boolean;
@@ -17,6 +18,7 @@ export function Sidebar({
   selectedId,
   maxSessions,
   onNew,
+  onDeleteAll,
   onSelect,
   onCouncilSettings,
   councilSettingsActive
@@ -48,6 +50,15 @@ export function Sidebar({
             New
           </button>
         </div>
+        {sessions.length > 0 ? (
+          <button
+            type="button"
+            onClick={onDeleteAll}
+            className="mt-3 rounded-md border border-red-300 px-3 py-2 text-sm font-medium text-red-700 transition hover:bg-red-50"
+          >
+            Delete All Chats
+          </button>
+        ) : null}
         {limitReached ? (
           <p className="mt-2 text-sm text-red-700">Delete a session before creating another.</p>
         ) : null}

@@ -129,6 +129,8 @@ export type CostSummary = {
   output_tokens: number;
   calls: number;
   estimated: boolean;
+  pricing_complete?: boolean;
+  warnings?: string[];
   rate_source: string;
   models: Array<{
     model: string;
@@ -139,6 +141,9 @@ export type CostSummary = {
     cost_usd: number;
     input_usd_per_1m: number;
     output_usd_per_1m: number;
+    pricing_source?: string;
+    pricing_live?: boolean;
+    pricing_available?: boolean;
   }>;
 };
 
@@ -149,7 +154,6 @@ export type SupportedModel = {
   api_key_env: string;
   litellm_model: string;
   configured: boolean;
-  route_source?: string | null;
   availability_reason?: string | null;
 };
 

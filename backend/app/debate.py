@@ -460,13 +460,16 @@ class DebateManager:
                 f"Debate {debate_id[:8]} completed. Judge summary saved.",
                 session_id=session_id,
             )
+            async with self._lock:
+                self._active_debates.discard(debate_id)
+                active_after_completion = len(self._active_debates)
             await self._send_json(
                 websocket,
                 {
                     "type": "debate_completed",
                     "debate_id": debate_id,
                     "judge_summary": judge_summary,
-                    "active_debates": self.active_count - 1,
+                    "active_debates": active_after_completion,
                     "cost_summary": cost_summary,
                 }
             )
@@ -1666,8 +1669,6 @@ class DebateManager:
                 break
             except Exception as exc:
                 last_exc = exc
-                if route.source == "github_models" and self._is_github_unknown_model_error(exc):
-                    continue
                 self._maybe_disable_model_route(model, exc)
                 raise
         if response is None:
@@ -1882,11 +1883,28 @@ class DebateManager:
             challenge_index = -1
             challenge_basis = list(record.get("basis") or [])
             for item in challenge_basis:
-                if isinstance(item, dict) and item.get("phase_key"):
+                if not isinstance(item, dict):
+                    continue
+                phase_key = str(item.get("phase_key") or "")
+                speaker = str(item.get("speaker") or "")
+                if not phase_key:
+                    continue
+                for index, turn in enumerate(transcript):
+                    if (
+                        str(turn.get("phase_key") or "") == phase_key
+                        and (not speaker or str(turn.get("speaker") or "") == speaker)
+                    ):
+                        challenge_index = index
+                        break
+                if challenge_index >= 0:
                     break
             if target_team and target_team in last_turn_index:
-                challenge_index = last_turn_index[target_team]
-            final_status = "Ignored" if challenge_index >= 0 else "Unanswered"
+                if challenge_index >= 0 and last_turn_index[target_team] > challenge_index:
+                    final_status = "Ignored"
+                else:
+                    final_status = "Unanswered"
+            else:
+                final_status = "Unanswered"
             payload = dict(record.get("payload") or {})
             payload["finalized_at_close"] = True
             self.db.update_intelligence_record(
@@ -2634,27 +2652,9 @@ class DebateManager:
         ):
             mark_model_unavailable(model.name, self._exception_text(exc))
 
-    def _is_github_unknown_model_error(self, exc: Exception) -> bool:
-        lowered = self._exception_text(exc).lower()
-        return "github" in lowered and "unknown model" in lowered
-
     def _provider_error_message(self, exc: Exception) -> str:
         message = self._exception_text(exc)
         lowered = message.lower()
-        if "`models` permission is required" in lowered or "models: read" in lowered:
-            return (
-                "GitHub Models rejected the token because it is missing the required "
-                "`models:read` permission. Create or edit the GitHub token, grant "
-                "GitHub Models access, then update GITHUB_MODELS_API_KEY. "
-                f"Details: {message}"
-            )
-        if "unknown model" in lowered and "github" in lowered:
-            return (
-                "GitHub Models does not accept this model ID for inference. "
-                "This model has been hidden for now. "
-                "Use the direct provider key for this model, or choose another supported model. "
-                f"Details: {message}"
-            )
         if any(marker in lowered for marker in ("529", "overloaded", "high load")):
             return f"Provider is overloaded or under high load. Retry shortly. Details: {message}"
         if "rate limit" in lowered or "429" in lowered:
@@ -2853,8 +2853,6 @@ class DebateManager:
                     raise ClientDisconnectedError(
                         "Browser disconnected before the response finished."
                     ) from exc
-                if route.source == "github_models" and self._is_github_unknown_model_error(exc):
-                    continue
                 raise CompletionStreamError(exc, had_output=bool(parts)) from exc
         else:
             assert last_exc is not None

@@ -279,7 +279,6 @@ Key-to-model mapping:
 | `GROQ_API_KEY` | `llama-4-maverick`, `llama-4-scout`, `llama-3.3-70b` |
 | `MINIMAX_API_KEY` | `minimax-m2.7`, `minimax-m2.5-lightning` |
 | `MOONSHOT_API_KEY` | `kimi-latest`, `kimi-k2-thinking`, `kimi-k2-turbo-preview`, `kimi-k2.5-vision`, `moonshot-v1-128k` |
-| `GITHUB_MODELS_API_KEY` | Optional GitHub Models gateway token. Unlocks only the supported models that GitHub's live catalog currently exposes to that token. |
 
 ### "Choose One Unlocked Model"
 
@@ -299,44 +298,6 @@ For testing without real APIs, set `MOCK_LLM_RESPONSES=true` in `.env` and resta
    - There may be extra spaces or invisible characters in the key. Copy-paste the key fresh.
    - The `.env` file may not be in the right location. It should be at the project root or `backend/.env`.
 4. Restart the backend after any `.env` changes.
-
-### GitHub Models Token Errors
-
-If you see an error like:
-
-```text
-The `models` permission is required to access this endpoint
-```
-
-that means GitHub recognized your token but refused inference because the token does not have the required GitHub Models permission.
-
-Why this happens:
-
-- A normal GitHub token is not automatically enough for GitHub Models inference.
-- Fine-grained PATs and GitHub App tokens need the `models:read` permission.
-- Organization policy can also block token access even if the token itself looks correct.
-
-Fix:
-
-1. Create or edit the token you are using for `GITHUB_MODELS_API_KEY`.
-2. Grant the token GitHub Models access with `models:read`.
-3. Update `.env` with the new token.
-4. Restart the backend.
-
-If you do not want to use GitHub Models, remove `GITHUB_MODELS_API_KEY` and use the direct provider key instead:
-
-- `GROQ_API_KEY` for Llama models
-- `OPENAI_API_KEY` for OpenAI models
-- `ANTHROPIC_API_KEY` for Anthropic models
-- `GOOGLE_API_KEY` for Gemini models
-
-Important:
-
-- GitHub Models support in this app is optional.
-- The app only unlocks models that both:
-  - exist in this project's supported model list, and
-  - are currently exposed by GitHub's live model catalog for your token.
-- So even after fixing the token, some app models may still stay locked if GitHub does not currently expose them.
 
 ### Shell Environment Variable Overriding .env
 
@@ -653,11 +614,17 @@ claude-sonnet-4-6 failed through LiteLLM: ...
 Common causes:
 
 - **Authentication error**: The API key is invalid or expired. Get a new key from the provider.
-- **GitHub Models permission error**: Your GitHub token exists but does not have `models:read`, so GitHub rejects inference with `401`.
 - **Quota/billing error**: Your account has run out of credits. Check your provider dashboard.
 - **Rate limit**: You are sending too many requests. Wait and retry, or use a different model.
 - **Model not found**: The model name in `MODEL_MAP` does not match what the provider expects. This should not happen with the built-in model list, but could occur if the registry was modified.
 - **Network error**: Your machine cannot reach the provider API. Check your internet connection.
+
+### Cost Estimates Look Old or Incomplete
+
+- The app now tries to refresh supported model prices from OpenRouter's model catalog before falling back to the local price table.
+- If you have an `OPENROUTER_API_KEY`, the backend includes it for the pricing lookup request. This affects pricing lookup only, not debate routing.
+- If your machine cannot reach OpenRouter, the UI will still show a cost estimate, but it will mention the local fallback price source.
+- If a model has no trusted live match and no local fallback price, the UI warns that totals exclude that model instead of pretending it cost `$0`.
 
 ### OpenAI Errors
 
@@ -681,13 +648,6 @@ Common causes:
 - `401 Invalid API key`: Check `GROQ_API_KEY`.
 - `429 Rate limit`: Groq has aggressive rate limits on free tier. Wait or upgrade.
 - `413 Request too large`: Reduce max tokens or context window.
-
-### GitHub Models Errors
-
-- `401 ... The models permission is required to access this endpoint`: Your `GITHUB_MODELS_API_KEY` does not have `models:read`, or organization policy is blocking the token.
-- `404 Model not found`: GitHub Models does not currently expose that model for your token, even if the provider has a similarly named direct model elsewhere.
-- `400 Unknown model: ...`: GitHub Models accepted your token but rejected that exact model ID for inference. This means the dropdown match was too optimistic for that model. The backend now temporarily hides that GitHub-routed model after the failure so it does not keep reappearing during the same backend session.
-- Models appear/disappear in the dropdown: The app checks GitHub's live catalog, so the unlocked set depends on what GitHub currently exposes for that token.
 
 ### MiniMax and Moonshot Errors
 

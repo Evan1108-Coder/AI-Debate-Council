@@ -959,6 +959,20 @@ class Database:
                 )
             return deleted
 
+    def delete_all_sessions(self) -> int:
+        with self.lock, self.session(immediate=True) as connection:
+            deleted = connection.execute("SELECT COUNT(*) AS total FROM sessions").fetchone()["total"]
+            connection.execute("DELETE FROM sessions")
+            connection.execute(
+                """
+                INSERT INTO app_metadata (key, value)
+                VALUES (?, '0')
+                ON CONFLICT(key) DO UPDATE SET value = '0'
+                """,
+                (SESSION_COUNTER_KEY,),
+            )
+            return int(deleted)
+
     def touch_session(self, session_id: str) -> None:
         with self.lock, self.session() as connection:
             connection.execute(
