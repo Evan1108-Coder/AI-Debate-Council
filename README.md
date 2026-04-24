@@ -1,5 +1,7 @@
 # AI Debate Council
 
+> **This is the `master-website-interface` branch** — the web application that runs in your browser. For the desktop app version (macOS `.dmg` / Windows `.exe`), see the [`master-app-interface`](https://github.com/Evan1108-Coder/AI-Debate-Council/tree/master-app-interface) branch.
+
 AI Debate Council is a full-stack web application where two AI teams — Pro and Con — debate any topic you choose in real time, or where you can practice debating directly against an AI opponent. Each AI team fields up to four specialist debaters with distinct roles. After the debate, an optional Judge Assistant audits the transcript for missed points, and the Judge system can use either one Judge or a 3/5-person judge panel with analytics-weighted scoring. The entire exchange streams token by token over WebSockets so you can watch it unfold live.
 
 The backend is Python 3.13, FastAPI, SQLite, WebSockets, and LiteLLM. The frontend is Next.js, React, TypeScript, and Tailwind CSS.

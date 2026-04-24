@@ -1,6 +1,8 @@
-# Setup
+# Setup (Web Version)
 
-Step-by-step installation guide for AI Debate Council. For environment variable details, see [ENVREADME.md](ENVREADME.md). For troubleshooting, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+Step-by-step installation guide for AI Debate Council as a web application running in your browser. For environment variable details, see [ENVREADME.md](ENVREADME.md). For troubleshooting, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+
+> **Looking for the desktop app?** Switch to the `master-app-interface` branch for the Electron desktop application with `.dmg` and `.exe` installers.
 
 ## Requirements
 
@@ -30,7 +32,7 @@ python3.13 --version
 ### Step 2: Clone the Repository
 
 ```bash
-git clone https://github.com/Evan1108-Coder/AI-Debate-Council.git
+git clone -b master-website-interface https://github.com/Evan1108-Coder/AI-Debate-Council.git
 cd AI-Debate-Council
 ```
 
