@@ -176,6 +176,24 @@ export default function Home() {
     selectedIdRef.current = selectedId;
   }, [selectedId]);
 
+  useEffect(() => {
+    const theme = councilSettings?.theme ?? "Light";
+    const html = document.documentElement;
+    localStorage.setItem("adc-theme", theme);
+    if (theme === "Dark") {
+      html.classList.add("dark");
+      return;
+    }
+    if (theme === "System") {
+      const mq = window.matchMedia("(prefers-color-scheme: dark)");
+      html.classList.toggle("dark", mq.matches);
+      const handler = (e: MediaQueryListEvent) => html.classList.toggle("dark", e.matches);
+      mq.addEventListener("change", handler);
+      return () => mq.removeEventListener("change", handler);
+    }
+    html.classList.remove("dark");
+  }, [councilSettings?.theme]);
+
   const refreshSessions = useCallback(async () => {
     const nextSessions = await listSessions();
     setSessions(nextSessions);

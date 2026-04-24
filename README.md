@@ -123,6 +123,11 @@ The backend is Python 3.13, FastAPI, SQLite, WebSockets, and LiteLLM. The fronte
 - Export format (Markdown, PDF, JSON — reserved).
 - Auto-save interval (5–300 seconds).
 
+### Appearance
+
+- **Dark mode**: Council Settings includes a theme toggle with three options: Light (default), Dark, and System (follows your OS preference).
+- **Persisted**: The theme choice is saved on the server and cached in the browser so the correct theme loads instantly on the next visit.
+
 ## Architecture Overview
 
 ```text

@@ -94,6 +94,15 @@ function waitForServer(url, timeoutMs = 60000) {
   });
 }
 
+function updateSplashStatus(text) {
+  if (!splashWindow || splashWindow.isDestroyed()) return;
+  splashWindow.webContents
+    .executeJavaScript(
+      `document.querySelector('.status').textContent = ${JSON.stringify(text)}`
+    )
+    .catch(() => {});
+}
+
 function createSplashWindow() {
   const isMac = process.platform === "darwin";
 
@@ -183,6 +192,7 @@ function createSplashWindow() {
           color: rgba(255, 255, 255, 0.5);
           font-size: 13px;
           margin-bottom: 24px;
+          transition: opacity 0.2s;
         }
         .loader {
           width: 200px;
@@ -221,15 +231,18 @@ function createSplashWindow() {
 }
 
 function createMainWindow() {
+  const isMac = process.platform === "darwin";
+
   mainWindow = new BrowserWindow({
     width: 1400,
     height: 900,
     minWidth: 900,
     minHeight: 600,
     show: false,
-    titleBarStyle: "hiddenInset",
-    trafficLightPosition: { x: 16, y: 16 },
-    backgroundColor: "#0f0f14",
+    ...(isMac
+      ? { titleBarStyle: "hiddenInset", trafficLightPosition: { x: 16, y: 16 } }
+      : {}),
+    backgroundColor: "#f5f7f6",
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -238,8 +251,9 @@ function createMainWindow() {
 
   mainWindow.loadURL(`http://127.0.0.1:${FRONTEND_PORT}`);
 
-  mainWindow.once("ready-to-show", () => {
-    if (splashWindow) {
+  mainWindow.webContents.once("did-finish-load", () => {
+    if (!mainWindow) return;
+    if (splashWindow && !splashWindow.isDestroyed()) {
       splashWindow.close();
       splashWindow = null;
     }
@@ -323,7 +337,7 @@ async function startBackend() {
   const python = getVenvPython();
 
   if (!fs.existsSync(python)) {
-    const result = await dialog.showMessageBox({
+    await dialog.showMessageBox({
       type: "error",
       title: "Python Environment Not Found",
       message:
@@ -388,6 +402,7 @@ async function startFrontend() {
 
   if (!fs.existsSync(path.join(frontendDir, "node_modules"))) {
     console.log("Installing frontend dependencies...");
+    updateSplashStatus("Installing frontend dependencies\u2026");
     const install = spawn(npm, ["install"], {
       cwd: frontendDir,
       env,
@@ -467,20 +482,21 @@ app.on("ready", async () => {
   createSplashWindow();
 
   try {
-    await startBackend();
-    await startFrontend();
+    updateSplashStatus("Starting backend and frontend\u2026");
+    await Promise.all([startBackend(), startFrontend()]);
 
-    console.log("Waiting for backend...");
-    await waitForServer(`http://127.0.0.1:${BACKEND_PORT}/health`, 60000);
+    updateSplashStatus("Waiting for backend\u2026");
+    await waitForServer(`http://127.0.0.1:${BACKEND_PORT}/health`, 120000);
     console.log("Backend is ready.");
 
-    console.log("Waiting for frontend...");
-    await waitForServer(`http://127.0.0.1:${FRONTEND_PORT}`, 90000);
+    updateSplashStatus("Waiting for frontend\u2026");
+    await waitForServer(`http://127.0.0.1:${FRONTEND_PORT}`, 120000);
     console.log("Frontend is ready.");
 
+    updateSplashStatus("Loading app\u2026");
     createMainWindow();
   } catch (err) {
-    if (splashWindow) {
+    if (splashWindow && !splashWindow.isDestroyed()) {
       splashWindow.close();
       splashWindow = null;
     }

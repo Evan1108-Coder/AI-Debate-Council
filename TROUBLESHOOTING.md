@@ -915,6 +915,16 @@ netstat -ano | findstr :8000
 taskkill /PID <PID> /F
 ```
 
+### Dark Mode Does Not Apply
+
+The app supports Light, Dark, and System themes via **Council Settings > Appearance > Theme**.
+
+If dark mode does not apply:
+
+1. Make sure the backend is running — the theme is stored server-side and fetched on load.
+2. Clear your browser/Electron cache if a stale localStorage value (`adc-theme`) overrides the server setting.
+3. If using "System" mode, check that your OS dark mode preference is set correctly.
+
 ### Building the Desktop App From Source
 
 See the [Desktop App section in README.md](README.md#desktop-app-this-branch) for build instructions.

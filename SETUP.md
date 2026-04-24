@@ -115,6 +115,8 @@ Click the **+** button in the sidebar to create your first session. The setup mo
 
 After the chat is created, select an Overall Model from the dropdown and type either a normal message or a debate topic.
 
+To switch between light and dark mode, open **Council Settings** from the sidebar footer and change the **Theme** to Light, Dark, or System (follows your OS preference).
+
 ## Windows
 
 ### Step 1: Install Python 3.13

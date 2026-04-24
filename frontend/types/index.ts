@@ -92,6 +92,7 @@ export type CouncilSettings = {
   debate_intelligence_depth: "Light" | "Normal" | "Deep";
   use_value_consequence_system: boolean;
   default_judge_mode: "Debate Performance" | "Truth-Seeking" | "Hybrid";
+  theme: "Light" | "Dark" | "System";
   confirmation_preferences: Record<
     "delete_chat" | "clear_chat_history" | "clear_chat_memory",
     boolean

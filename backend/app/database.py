@@ -29,6 +29,7 @@ DEFAULT_COUNCIL_SETTINGS = {
     "universal_experience": True,
     "use_agent_identity_profiles": True,
     "use_user_debate_profile": True,
+    "theme": "Light",
     "debate_intelligence_depth": "Normal",
     "use_value_consequence_system": True,
     "default_judge_mode": "Hybrid",
@@ -37,6 +38,7 @@ DEFAULT_COUNCIL_SETTINGS = {
 COUNCIL_SETTING_CHOICES = {
     "debate_intelligence_depth": {"Light", "Normal", "Deep"},
     "default_judge_mode": {"Debate Performance", "Truth-Seeking", "Hybrid"},
+    "theme": {"Light", "Dark", "System"},
 }
 
 
@@ -659,6 +661,11 @@ class Database:
                 merged.get("default_judge_mode", "Hybrid"),
                 COUNCIL_SETTING_CHOICES["default_judge_mode"],
                 "Hybrid",
+            ),
+            "theme": self._normalize_choice(
+                merged.get("theme", "Light"),
+                COUNCIL_SETTING_CHOICES["theme"],
+                "Light",
             ),
             "confirmation_preferences": {
                 key: bool(preferences.get(key, default_value))

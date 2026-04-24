@@ -35,6 +35,7 @@ class CouncilSettingsUpdate(BaseModel):
     debate_intelligence_depth: str | None = None
     use_value_consequence_system: bool | None = None
     default_judge_mode: str | None = None
+    theme: str | None = None
     confirmation_preferences: dict[str, bool] | None = None
 
 

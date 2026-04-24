@@ -1517,6 +1517,18 @@ function CouncilSettingsPanel({
   return (
     <section className="min-h-0 flex-1 overflow-y-auto p-4">
       <div className="mx-auto max-w-5xl space-y-4">
+        <Panel title="Appearance">
+          <SelectSetting
+            label="Theme"
+            value={settings.theme}
+            options={["Light", "Dark", "System"]}
+            onChange={(value) => onChange({ theme: value as CouncilSettings["theme"] })}
+          />
+          <p className="mt-3 text-sm text-zinc-600">
+            Choose Light, Dark, or System to follow your operating system preference.
+          </p>
+        </Panel>
+
         <Panel title="Universal experience">
           <div className="grid gap-3 md:grid-cols-2">
             <ToggleSetting
