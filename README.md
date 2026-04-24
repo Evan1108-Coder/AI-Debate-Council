@@ -19,6 +19,7 @@ The backend is Python 3.13, FastAPI, SQLite, WebSockets, and LiteLLM. The fronte
 - [Quick Start](#quick-start)
 - [Running Tests](#running-tests)
 - [Development Notes](#development-notes)
+- [Branches](#branches)
 - [Related Documentation](#related-documentation)
 - [License](#license)
 
@@ -523,6 +524,15 @@ Tests use mock mode and do not require API keys.
 For local UI testing without real model calls, set `MOCK_LLM_RESPONSES=true` in `.env` and restart the backend.
 
 The backend loads `.env` from the project root first, then `backend/.env` as an override. Shell-level environment variables are overridden by the `.env` files to prevent stale keys from silently unlocking providers.
+
+## Branches
+
+| Branch | Description |
+| --- | --- |
+| `master-website-interface` | Web application. Run in the browser via `dev.py` or separate backend/frontend commands. |
+| `master-app-interface` | Desktop application. Electron wrapper that bundles the backend and frontend into a native app for macOS (.dmg) and Windows (.exe). |
+
+Both branches share the same backend and frontend code. The app branch adds an Electron shell that starts the servers automatically and displays the frontend in a native window.
 
 ## Related Documentation
 

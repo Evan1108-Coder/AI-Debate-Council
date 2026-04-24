@@ -310,7 +310,7 @@ To pull the latest changes:
 
 ```bash
 cd AI-Debate-Council
-git pull origin master
+git pull
 
 # Reinstall backend dependencies (in case requirements changed)
 source .venv/bin/activate   # macOS/Linux
