@@ -106,7 +106,7 @@ You only need to do this once. macOS remembers your choice.
 
 ### Step 8: Using the App
 
-The app automatically starts the backend (port 8000) and frontend (port 6001), shows a splash screen while loading, then opens the main window.
+The app starts the backend (port 8000) and frontend (port 6001) as invisible background processes — no terminal window or console box appears. A splash screen with window controls (close/minimize/maximize on macOS, close button on Windows) is shown while the servers start. Closing the splash screen during startup cleanly quits the app and all background processes. Once the servers are ready, the main window opens automatically.
 
 Click the **+** button in the sidebar to create your first session. The setup modal lets you choose:
 
@@ -214,7 +214,7 @@ cd electron
 npm start
 ```
 
-This starts Electron, which launches the backend and frontend servers and opens the app window.
+This starts Electron, which launches the backend and frontend as background processes, shows a splash screen, and opens the app window once the servers are ready.
 
 ## Mock Mode
 

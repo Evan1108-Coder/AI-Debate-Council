@@ -2,7 +2,7 @@
 
 > **This is the `master-app-interface` branch** — the Electron desktop application (macOS `.dmg` / Windows `.exe`). For the web version that runs in your browser, see the [`master-website-interface`](https://github.com/Evan1108-Coder/AI-Debate-Council/tree/master-website-interface) branch.
 
-AI Debate Council is a multi-AI debate system where two AI teams — Pro and Con — debate any topic you choose in real time, or where you can practice debating directly against an AI opponent. This branch packages the application as a native desktop app using Electron. The app starts the Python backend and Next.js frontend automatically and displays the UI in a native window.
+AI Debate Council is a multi-AI debate system where two AI teams — Pro and Con — debate any topic you choose in real time, or where you can practice debating directly against an AI opponent. This branch packages the application as a native desktop app using Electron. The app runs like a normal desktop application — it starts the Python backend and Next.js frontend as invisible background processes and displays the UI in a native window. There is no terminal window or console box visible during startup.
 
 The backend is Python 3.13, FastAPI, SQLite, WebSockets, and LiteLLM. The frontend is Next.js, React, TypeScript, and Tailwind CSS. The desktop shell is Electron.
 
@@ -185,11 +185,10 @@ The backend is a single Python process. All state lives in SQLite. The active-de
 │   ├── postcss.config.mjs
 │   └── tsconfig.json
 ├── electron/
-│   ├── main.js                  # Electron main process: starts servers, splash screen
+│   ├── main.js                  # Electron main process: background servers, splash screen
 │   ├── package.json             # Electron + electron-builder configuration
 │   └── icons/
-│       ├── icon.svg             # Source icon (liquid glass design)
-│       ├── icon.png             # 1024x1024 PNG
+│       ├── icon.png             # 1024x1024 PNG source icon
 │       ├── icon.icns            # macOS icon
 │       └── icon.ico             # Windows icon
 ├── .env.example
@@ -475,7 +474,7 @@ In practice mode, send `{"type": "end_practice_debate", "model": "model-name"}` 
 
 ## Desktop App (This Branch)
 
-This branch (`master-app-interface`) wraps the web application in an Electron shell that runs as a native desktop app on macOS and Windows. The app starts the Python backend and Next.js frontend automatically and displays the UI in a native window.
+This branch (`master-app-interface`) wraps the web application in an Electron shell that runs as a native desktop app on macOS and Windows. The app starts the Python backend and Next.js frontend as invisible background processes — no terminal window or console box appears during startup. A splash screen with native window controls (close, minimize, maximize on macOS; close button on Windows) is shown while the servers start. Closing the splash screen during startup cleanly terminates all background processes.
 
 ### Pre-built Installers
 
@@ -565,7 +564,7 @@ cd electron
 npm start
 ```
 
-This starts Electron, which launches the backend and frontend servers and opens the app window.
+This starts Electron, which launches the backend and frontend as background processes, shows a splash screen, and opens the app window once the servers are ready.
 
 ## Quick Start (Web Version)
 
@@ -635,7 +634,7 @@ The backend loads `.env` from the project root first, then `backend/.env` as an 
 | `master-website-interface` | Web application. Run in the browser via `dev.py` or separate backend/frontend commands. |
 | `master-app-interface` | Desktop application. Electron wrapper that bundles the backend and frontend into a native app for macOS (.dmg) and Windows (.exe). |
 
-Both branches share the same backend and frontend code. The app branch adds an Electron shell that starts the servers automatically and displays the frontend in a native window.
+Both branches share the same backend and frontend code. The app branch adds an Electron shell that starts the servers as invisible background processes (no terminal or console windows) and displays the frontend in a native window with a splash screen during startup.
 
 ## Related Documentation
 

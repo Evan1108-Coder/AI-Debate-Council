@@ -833,12 +833,35 @@ pip install -r backend/requirements.txt
 
 ### App Shows "Startup Error: Server Did Not Start"
 
-This means the backend or frontend failed to start within the timeout period. Check:
+This means the backend or frontend failed to start within the timeout period. The servers run as invisible background processes, so there is no terminal window to check. Instead:
 
 1. Python 3.13 is installed and the `.venv` exists inside the app content directory.
 2. Node.js 20+ is installed and `frontend/node_modules` exists.
 3. No other process is using port 8000 or 6001.
 4. The `.env` file exists (copy from `.env.example`) with at least one API key or `MOCK_LLM_RESPONSES=true`.
+5. Try running the backend manually from a terminal to see error output:
+
+**macOS:**
+
+```bash
+cd /Applications/AI\ Debate\ Council.app/Contents/Resources/app-content
+source .venv/bin/activate
+python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+```
+
+**Windows:**
+
+```powershell
+cd "$env:LOCALAPPDATA\Programs\ai-debate-council\resources\app-content"
+.\.venv\Scripts\Activate.ps1
+python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
+```
+
+### Splash Screen Has No Window Controls
+
+The splash screen should show native close/minimize/maximize buttons on macOS (traffic lights) and a close button on Windows. If you do not see these, you may be running an older version of the app. Download the latest installer from [Releases](https://github.com/Evan1108-Coder/AI-Debate-Council/releases).
+
+Closing the splash screen during startup cleanly quits the app and terminates all background server processes.
 
 ### App Window Is Blank
 
