@@ -1,0 +1,119 @@
+{
+  "name": "ai-debate-council",
+  "version": "1.0.0",
+  "description": "AI Debate Council - Multi-AI Debate System",
+  "main": "main.js",
+  "author": "Evan Lu",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "build:mac": "electron-builder --mac",
+    "build:win": "electron-builder --win",
+    "build:all": "electron-builder --mac --win",
+    "pack": "electron-builder --dir"
+  },
+  "build": {
+    "appId": "com.aidebatecouncil.app",
+    "productName": "AI Debate Council",
+    "copyright": "Copyright (c) 2026 Evan Lu",
+    "directories": {
+      "output": "../dist"
+    },
+    "files": [
+      "main.js",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../backend",
+        "to": "app-content/backend",
+        "filter": [
+          "**/*",
+          "!**/__pycache__/**",
+          "!**/data/**",
+          "!**/*.pyc"
+        ]
+      },
+      {
+        "from": "../frontend",
+        "to": "app-content/frontend",
+        "filter": [
+          "**/*",
+          "!**/node_modules/**",
+          "!**/.next/**"
+        ]
+      },
+      {
+        "from": "../.env.example",
+        "to": "app-content/.env.example"
+      },
+      {
+        "from": "../dev.py",
+        "to": "app-content/dev.py"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.education",
+      "icon": "icons/icon.icns",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["arm64", "x64"]
+        }
+      ],
+      "darkModeSupport": true,
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false
+    },
+    "dmg": {
+      "title": "AI Debate Council",
+      "iconSize": 80,
+      "contents": [
+        {
+          "x": 130,
+          "y": 220
+        },
+        {
+          "x": 410,
+          "y": 220,
+          "type": "link",
+          "path": "/Applications"
+        }
+      ],
+      "window": {
+        "width": 540,
+        "height": 380
+      }
+    },
+    "win": {
+      "icon": "icons/icon.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "installerIcon": "icons/icon.ico",
+      "uninstallerIcon": "icons/icon.ico",
+      "installerHeaderIcon": "icons/icon.ico",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "AI Debate Council"
+    },
+    "linux": {
+      "icon": "icons/icon.png",
+      "target": ["AppImage"],
+      "category": "Education"
+    }
+  },
+  "devDependencies": {
+    "electron": "^35.0.0",
+    "electron-builder": "^26.0.0"
+  }
+}

@@ -16,7 +16,8 @@ The backend is Python 3.13, FastAPI, SQLite, WebSockets, and LiteLLM. The fronte
 - [Session and Debate Management](#session-and-debate-management)
 - [API Reference](#api-reference)
 - [WebSocket Protocol](#websocket-protocol)
-- [Quick Start](#quick-start)
+- [Desktop App (This Branch)](#desktop-app-this-branch)
+- [Quick Start (Web Version)](#quick-start-web-version)
 - [Running Tests](#running-tests)
 - [Development Notes](#development-notes)
 - [Branches](#branches)
@@ -462,11 +463,103 @@ In practice mode, send `{"type": "end_practice_debate", "model": "model-name"}` 
 | `interaction_completed` | Chat finished. Includes `cost_summary`. |
 | `error` | An error occurred. Includes error message string. |
 
-## Quick Start
+## Desktop App (This Branch)
 
-Read [SETUP.md](SETUP.md) for detailed macOS and Windows instructions.
+This branch (`master-app-interface`) wraps the web application in an Electron shell that runs as a native desktop app on macOS and Windows. The app starts the Python backend and Next.js frontend automatically and displays the UI in a native window.
 
-Short version:
+### Pre-built Installers
+
+Download from [Releases](https://github.com/Evan1108-Coder/AI-Debate-Council/releases):
+
+| Platform | File | Notes |
+| --- | --- | --- |
+| macOS (Apple Silicon) | `AI Debate Council-1.0.0-arm64.dmg` | M1/M2/M3/M4 Macs |
+| macOS (Intel) | `AI Debate Council-1.0.0.dmg` | Intel Macs |
+| Windows | `AI Debate Council Setup 1.0.0.exe` | 64-bit Windows |
+
+### Prerequisites
+
+The desktop app still requires:
+
+- **Python 3.13** installed on your system
+- **Node.js 20+** installed on your system
+- A Python virtual environment (`.venv`) with backend dependencies installed
+- Frontend dependencies installed (`npm install` in `frontend/`)
+
+The app bundles the backend and frontend source code but not the Python runtime or Node.js runtime.
+
+### macOS Installation
+
+1. Install prerequisites (Python 3.13, Node.js 20+).
+2. Open the `.dmg` file and drag **AI Debate Council** to the **Applications** folder.
+3. Before first launch, set up the project:
+
+```bash
+cd /Applications/AI\ Debate\ Council.app/Contents/Resources/app-content
+python3.13 -m venv .venv
+source .venv/bin/activate
+pip install -r backend/requirements.txt
+cd frontend && npm install && cd ..
+cp .env.example .env
+# Edit .env to add at least one provider API key
+```
+
+4. Launch **AI Debate Council** from Applications.
+
+### Windows Installation
+
+1. Install prerequisites (Python 3.13, Node.js 20+).
+2. Run `AI Debate Council Setup 1.0.0.exe` and follow the installer prompts.
+3. Before first launch, set up the project in a terminal:
+
+```powershell
+cd "$env:LOCALAPPDATA\Programs\ai-debate-council\resources\app-content"
+py -3.13 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r backend/requirements.txt
+cd frontend; npm install; cd ..
+Copy-Item .env.example .env
+# Edit .env to add at least one provider API key
+```
+
+4. Launch **AI Debate Council** from the Start Menu or Desktop shortcut.
+
+### Building from Source
+
+```bash
+git clone https://github.com/Evan1108-Coder/AI-Debate-Council.git
+cd AI-Debate-Council
+git checkout master-app-interface
+
+# Set up backend and frontend first
+python3.13 -m venv .venv
+source .venv/bin/activate
+pip install -r backend/requirements.txt
+cd frontend && npm install && npx next build && cd ..
+
+# Install Electron dependencies
+cd electron && npm install
+
+# Build for your platform
+npm run build:mac    # macOS .dmg
+npm run build:win    # Windows .exe
+npm run build:all    # Both platforms
+```
+
+Built installers appear in the `dist/` directory.
+
+### Running in Development Mode
+
+```bash
+cd electron
+npm start
+```
+
+This starts Electron, which launches the backend and frontend servers and opens the app window.
+
+## Quick Start (Web Version)
+
+For the web version, switch to the `master-website-interface` branch. See [SETUP.md](SETUP.md) for detailed instructions.
 
 ```bash
 python3.13 -m venv .venv

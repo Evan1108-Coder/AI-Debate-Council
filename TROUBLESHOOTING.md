@@ -18,6 +18,7 @@ Solutions for every known issue with AI Debate Council. For installation steps, 
 - [Performance Issues](#performance-issues)
 - [Windows-Specific Issues](#windows-specific-issues)
 - [macOS-Specific Issues](#macos-specific-issues)
+- [Desktop App (Electron) Issues](#desktop-app-electron-issues)
 
 ---
 
@@ -805,3 +806,73 @@ xcode-select --install
 ### macOS Firewall Prompt
 
 When starting the backend, macOS may ask to allow incoming network connections. Click "Allow" for the debates to work in the browser.
+
+## Desktop App (Electron) Issues
+
+### App Shows "Python Environment Not Found"
+
+The Electron app looks for `.venv` inside the bundled app content. You need to create the virtual environment inside the app resources:
+
+**macOS:**
+
+```bash
+cd /Applications/AI\ Debate\ Council.app/Contents/Resources/app-content
+python3.13 -m venv .venv
+source .venv/bin/activate
+pip install -r backend/requirements.txt
+```
+
+**Windows:**
+
+```powershell
+cd "$env:LOCALAPPDATA\Programs\ai-debate-council\resources\app-content"
+py -3.13 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r backend/requirements.txt
+```
+
+### App Shows "Startup Error: Server Did Not Start"
+
+This means the backend or frontend failed to start within the timeout period. Check:
+
+1. Python 3.13 is installed and the `.venv` exists inside the app content directory.
+2. Node.js 20+ is installed and `frontend/node_modules` exists.
+3. No other process is using port 8000 or 6001.
+4. The `.env` file exists (copy from `.env.example`) with at least one API key or `MOCK_LLM_RESPONSES=true`.
+
+### App Window Is Blank
+
+If the Electron window opens but shows nothing:
+
+1. Press `Cmd+Shift+I` (macOS) or `Ctrl+Shift+I` (Windows) to open DevTools.
+2. Check the Console tab for errors.
+3. Verify the backend is running: open `http://localhost:8000/health` in a regular browser.
+4. Verify the frontend is running: open `http://localhost:6001` in a regular browser.
+
+### "macOS Cannot Verify That This App Is Free From Malware"
+
+The app is not code-signed with an Apple Developer certificate. To open it:
+
+1. Right-click (or Ctrl+click) the app in Applications.
+2. Select "Open" from the context menu.
+3. Click "Open" in the dialog.
+
+You only need to do this once. macOS remembers your choice.
+
+### Ports Already In Use
+
+If ports 8000 or 6001 are already occupied, the Electron app will assume those servers are already running and connect to them. This is usually fine if you are running the web version alongside the desktop app. If the ports are used by unrelated processes, stop those processes first:
+
+```bash
+# macOS/Linux
+lsof -ti:8000 | xargs kill
+lsof -ti:6001 | xargs kill
+
+# Windows
+netstat -ano | findstr :8000
+taskkill /PID <PID> /F
+```
+
+### Building the Desktop App From Source
+
+See the [Desktop App section in README.md](README.md#desktop-app-this-branch) for build instructions.

@@ -33,6 +33,11 @@ yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
 
+# Electron
+electron/node_modules/
+electron/dist/
+dist/
+
 # OS and editor
 .DS_Store
 Thumbs.db
