@@ -1849,27 +1849,33 @@ class DebateManager:
         ai_side: str,
     ) -> list[dict[str, Any]]:
         transcript = []
+        current_round = 0
         for message in self.db.list_messages_for_debate(session_id, debate_id, include_hidden=True):
             role = str(message.get("role") or "")
             if role == "practice_user":
                 team = human_side
                 archetype = "human_debater"
+                current_round += 1
+                round_number = current_round
             elif role == "practice_debater":
                 team = ai_side
                 archetype = "practice_debater"
+                round_number = current_round or 1
             elif role in {"judge", "judge_assistant", "debate_trainer"}:
                 team = "neutral"
                 archetype = role
+                round_number = current_round or int(message.get("phase_index") or 0)
             else:
                 team = "neutral"
                 archetype = role
+                round_number = current_round or int(message.get("phase_index") or 0)
             transcript.append(
                 {
                     "speaker": message.get("speaker") or role,
                     "role": role,
                     "team": team,
                     "archetype": archetype,
-                    "round": message.get("phase_index") or 0,
+                    "round": round_number,
                     "model": message.get("model") or "",
                     "intent": "practice debate turn",
                     "target": "the practice debate",
@@ -3126,7 +3132,8 @@ class DebateManager:
             scores[signal_winner] += effective_analytics_weight
         ranked = sorted(scores.items(), key=lambda item: item[1], reverse=True)
         winner = ranked[0][0]
-        if len(ranked) > 1 and ranked[0][1] - ranked[1][1] < 0.04:
+        tie_gap = ranked[0][1] - ranked[1][1] if len(ranked) > 1 else 1.0
+        if len(ranked) > 1 and tie_gap < 0.04:
             winner = "unclear"
         return {
             "winner": winner,
@@ -3135,7 +3142,9 @@ class DebateManager:
             "analytics_signal": analytics_signal,
             "analytics_weight": analytics_weight,
             "effective_analytics_weight": effective_analytics_weight,
-            "tie": len(ranked) > 1 and ranked[0][1] - ranked[1][1] < 0.04,
+            "tie_gap": round(tie_gap, 3),
+            "tie_threshold": 0.04,
+            "tie": len(ranked) > 1 and tie_gap < 0.04,
         }
 
     def _safe_float(self, value: object, default: float = 0.0) -> float:
@@ -3180,12 +3189,16 @@ class DebateManager:
         )
         if result.get("tie"):
             reason = (
-                f"{reason} The weighted scores were close enough to treat the result as unresolved."
+                f"{reason} The weighted scores were close enough to treat the result as unresolved because the top-score gap was only {result['tie_gap']} against a {result['tie_threshold']} tie threshold."
             )
         note = (
             f"Weighted verdict note: analytics weight {round(result['analytics_weight'] * 100)}%. "
             f"Scores: Pro {scores['pro']}, Con {scores['con']}, Unclear {scores['unclear']}."
         )
+        if result.get("tie"):
+            note = (
+                f"{note} Tie rule: if the top weighted-score gap stays below {result['tie_threshold']}, the result becomes Unclear."
+            )
         body = self._summary_without_verdict_header(normalized)
         return (
             f"WINNER: {self._winner_label(final_winner)}\n"
@@ -3220,7 +3233,7 @@ class DebateManager:
         )
         if result.get("tie"):
             reason = (
-                f"{reason} The panel/analytics scores were effectively tied, so the final result is marked unclear."
+                f"{reason} The panel/analytics scores were effectively tied, so the final result is marked unclear because the top-score gap was only {result['tie_gap']} against a {result['tie_threshold']} tie threshold."
             )
         panel_notes = []
         for index, summary in enumerate(panel_summaries, start=1):

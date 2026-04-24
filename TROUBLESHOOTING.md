@@ -179,6 +179,31 @@ You can also activate the virtual environment first and then use `python -m uvic
 
 If you get `ModuleNotFoundError: No module named 'backend'`, you are not in the project root.
 
+### One-command launcher does not start
+
+If you are using the new one-command launcher:
+
+```bash
+.venv/bin/python dev.py
+```
+
+and it exits immediately:
+
+1. Make sure both backend and frontend dependencies are installed.
+2. Make sure `frontend/node_modules` exists. If not:
+
+```bash
+cd frontend
+npm install
+cd ..
+```
+
+3. Make sure `.venv` exists and includes Uvicorn:
+
+```bash
+python -m pip install -r backend/requirements.txt
+```
+
 ### "No module named 'backend.app'"
 
 This means Python cannot find the backend package. Check:

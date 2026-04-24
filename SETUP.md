@@ -73,7 +73,25 @@ One provider key unlocks all models from that provider. For example, one `OPENAI
 
 See [ENVREADME.md](ENVREADME.md) for the full list of 21 models across 6 providers.
 
-### Step 7: Start the Backend
+### Step 7: Install Frontend Dependencies
+
+```bash
+cd frontend
+npm install
+cd ..
+```
+
+### Step 8: Start the Whole App in One Terminal (Recommended)
+
+```bash
+.venv/bin/python dev.py
+```
+
+This starts the backend on `8000` and the frontend on `6001` together.
+
+### Step 9: Or Start the Backend and Frontend Separately
+
+Backend:
 
 ```bash
 .venv/bin/python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
@@ -95,18 +113,10 @@ Check your models:
 http://localhost:8000/api/models
 ```
 
-### Step 8: Install Frontend Dependencies (New Terminal)
-
-Open a second terminal window:
+Frontend (new terminal):
 
 ```bash
-cd AI-Debate-Council/frontend
-npm install
-```
-
-### Step 9: Start the Frontend
-
-```bash
+cd frontend
 npm run dev -- -p 6001
 ```
 
@@ -198,22 +208,36 @@ This uses the Uvicorn package installed inside the project's virtual environment
 
 Verify: Open `http://localhost:8000/health` in your browser.
 
-### Step 9: Install Frontend Dependencies (New PowerShell Window)
-
-Open a second PowerShell window:
+### Step 9: Install Frontend Dependencies
 
 ```powershell
 cd AI-Debate-Council\frontend
 npm install
+cd ..
 ```
 
-### Step 10: Start the Frontend
+### Step 10: Start the Whole App in One PowerShell Window (Recommended)
 
 ```powershell
+.\.venv\Scripts\python dev.py
+```
+
+### Step 11: Or Start the Backend and Frontend Separately
+
+Backend:
+
+```powershell
+.\.venv\Scripts\python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Frontend (new PowerShell window):
+
+```powershell
+cd frontend
 npm run dev -- -p 6001
 ```
 
-### Step 11: Open the App
+### Step 12: Open the App
 
 ```text
 http://localhost:6001

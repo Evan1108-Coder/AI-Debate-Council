@@ -43,12 +43,14 @@ The backend is Python 3.13, FastAPI, SQLite, WebSockets, and LiteLLM. The fronte
 - **Free or structured practice**: Free mode lets the debate continue until the user ends it. Structured mode uses a chosen number of rounds and turns the last round into a closing appeal.
 - **Debate Trainer**: After the Judge verdict, a Debate Trainer reviews the user's performance, style, strengths, weaknesses, and next improvement targets.
 - **User Debate Profile**: The app stores a lightweight debate profile from practice results so future training can adapt without inventing false experience.
+- **Global training dashboard**: The sidebar includes **User Debate Profile** and **AI Debater Experiences** so the long-term coaching loop and AI identity memory are visible across all chats.
 
 ### Chat and Council Assistant
 
 - **Dual-mode interaction**: The system automatically classifies each message as "debate" or "chat" using an LLM intent classifier with heuristic fallback. Debate-like messages trigger the full council; normal messages go to the Council Assistant.
 - **Council Assistant**: A single chat agent that answers follow-up questions, explains past debate results, and handles non-debate conversations using the session's message history as memory.
 - **Always On mode**: Optionally force all messages through the Council Assistant, bypassing the intent classifier.
+- **Training-first onboarding**: New sessions open with AI vs Human training selected by default, while AI vs AI remains the council lab mode for observation and analysis.
 
 ### Model Support
 
@@ -167,6 +169,7 @@ The backend is a single Python process. All state lives in SQLite. The active-de
 │   │   └── page.tsx
 │   ├── components/
 │   │   ├── DebateRoom.tsx       # Main debate UI: chat, stats, settings panels
+│   │   ├── GlobalWorkspace.tsx  # Welcome screen, global AI memory, user training profile
 │   │   └── Sidebar.tsx          # Session list sidebar
 │   ├── lib/
 │   │   └── api.ts               # REST and WebSocket client functions
@@ -183,7 +186,8 @@ The backend is a single Python process. All state lives in SQLite. The active-de
 ├── README.md
 ├── SETUP.md
 ├── ENVREADME.md
-└── TROUBLESHOOTING.md
+├── TROUBLESHOOTING.md
+└── dev.py                       # One-command local launcher for backend + frontend
 ```
 
 ## Supported Models
@@ -412,7 +416,9 @@ Team role settings (Advocate, Rebuttal Critic, etc.) apply to both the Pro and C
 | `GET` | `/api/council-settings` | Get universal Council Settings. |
 | `PATCH` | `/api/council-settings` | Update universal Council Settings. |
 | `POST` | `/api/council-settings/reset-agent-experience` | Reset universal agent identity records with confirmation. |
+| `GET` | `/api/ai-debater-experiences` | Get the global AI identity memory view used by the AI Debater Experiences sidebar page. |
 | `GET` | `/api/user-debate-profile` | Get the AI vs Human Debate Training profile. |
+| `GET` | `/api/user-debate-profile/overview` | Get the global training dashboard view with recommendations and recent practice history. |
 | `POST` | `/api/user-debate-profile/reset` | Reset the user debate profile with confirmation. |
 | `POST` | `/api/runtime-diary` | Record a runtime diary entry. Body: `{"source": "...", "event": "...", "detail": "...", "session_id": "..."}`. |
 
@@ -462,20 +468,23 @@ Read [SETUP.md](SETUP.md) for detailed macOS and Windows instructions.
 Short version:
 
 ```bash
-# Terminal 1: Backend
 python3.13 -m venv .venv
 source .venv/bin/activate
 python -m pip install --upgrade pip
 pip install -r backend/requirements.txt
 cp .env.example .env
 # Edit .env to add at least one provider API key
-.venv/bin/python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+.venv/bin/python dev.py
 ```
 
-Using `.venv/bin/python -m uvicorn` is the most reliable local command because it uses the Uvicorn installed inside this project's virtual environment, even if the plain `uvicorn` command is not on your shell PATH.
+`dev.py` starts both the FastAPI backend on `8000` and the Next.js frontend on `6001` in one terminal.
 
 ```bash
-# Terminal 2: Frontend
+# If you prefer two terminals instead:
+# Terminal 1
+.venv/bin/python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+
+# Terminal 2
 cd frontend
 npm install
 npm run dev -- -p 6001

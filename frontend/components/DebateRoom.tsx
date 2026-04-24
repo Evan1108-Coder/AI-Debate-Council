@@ -236,7 +236,7 @@ export function DebateRoom({
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
               <p className="text-sm font-medium text-emerald-700">
-                {selectedSession.mode === "ai_vs_human" ? "Practice room" : "Council room"}
+                {selectedSession.mode === "ai_vs_human" ? "Practice room" : "Council lab"}
               </p>
               <span className="rounded bg-zinc-100 px-2 py-1 text-xs font-semibold text-zinc-700">
                 {selectedSession.mode === "ai_vs_human" ? "AI vs Human" : "AI vs AI"}
@@ -422,7 +422,7 @@ export function DebateRoom({
 
 function ProviderReadiness({ models }: { models: ModelsResponse | null }) {
   return (
-    <div className="grid gap-2 sm:grid-cols-2 lg:w-[520px]">
+    <div className="grid gap-2 sm:grid-cols-2 lg:w-[440px]">
       {models?.providers.map((provider) => (
         <div
           key={provider.provider}
@@ -1258,6 +1258,7 @@ function IntelligencePanel({
 
         <FeedbackQuestionsPanel
           key={`feedback-${debate.id}`}
+          resetKey={debate.id}
           questions={intelligence.feedback_questions}
           onFeedbackSubmit={onFeedbackSubmit}
         />
@@ -1808,9 +1809,11 @@ function ExperienceList({
 
 function FeedbackQuestionsPanel({
   questions,
+  resetKey,
   onFeedbackSubmit
 }: {
   questions: DebateIntelligence["feedback_questions"];
+  resetKey: string;
   onFeedbackSubmit: (questionKey: string, answer: string) => Promise<void>;
 }) {
   const [answers, setAnswers] = useState<Record<string, string>>({});
@@ -1818,6 +1821,14 @@ function FeedbackQuestionsPanel({
   const [sent, setSent] = useState<Record<string, boolean>>({});
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setAnswers({});
+    setOtherAnswers({});
+    setSent({});
+    setSavingKey(null);
+    setError(null);
+  }, [resetKey]);
 
   if (questions.length === 0) {
     return null;

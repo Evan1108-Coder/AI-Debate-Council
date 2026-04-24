@@ -1,4 +1,5 @@
 import type {
+  AgentExperienceOverview,
   ChatSession,
   CouncilSettings,
   DebateAnalytics,
@@ -8,7 +9,8 @@ import type {
   ModelsResponse,
   PracticeState,
   SessionSettings,
-  UserDebateProfile
+  UserDebateProfile,
+  UserDebateProfileOverview
 } from "@/types";
 
 export const API_BASE =
@@ -85,6 +87,10 @@ export function getUserDebateProfile() {
   return request<UserDebateProfile>("/api/user-debate-profile");
 }
 
+export function getUserDebateProfileOverview() {
+  return request<UserDebateProfileOverview>("/api/user-debate-profile/overview");
+}
+
 export function resetUserDebateProfile(confirmation: string) {
   return request<UserDebateProfile>("/api/user-debate-profile/reset", {
     method: "POST",
@@ -97,6 +103,10 @@ export function resetUniversalAgentExperience(confirmation: string) {
     method: "POST",
     body: JSON.stringify({ confirmation })
   });
+}
+
+export function getAiDebaterExperiences() {
+  return request<AgentExperienceOverview>("/api/ai-debater-experiences");
 }
 
 export function listSessions() {

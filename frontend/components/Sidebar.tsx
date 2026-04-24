@@ -2,26 +2,36 @@
 
 import type { ChatSession } from "@/types";
 
+export type SidebarWorkspaceView =
+  | "session"
+  | "aiExperiences"
+  | "userProfile"
+  | "councilSettings";
+
 type SidebarProps = {
   sessions: ChatSession[];
   selectedId: string | null;
   maxSessions: number;
+  workspaceView: SidebarWorkspaceView;
   onNew: () => void;
   onDeleteAll: () => void;
   onSelect: (id: string) => void;
+  onAiExperiences: () => void;
+  onUserProfile: () => void;
   onCouncilSettings: () => void;
-  councilSettingsActive: boolean;
 };
 
 export function Sidebar({
   sessions,
   selectedId,
   maxSessions,
+  workspaceView,
   onNew,
   onDeleteAll,
   onSelect,
+  onAiExperiences,
+  onUserProfile,
   onCouncilSettings,
-  councilSettingsActive
 }: SidebarProps) {
   const limitReached = sessions.length >= maxSessions;
   const aiSessions = sessions.filter((session) => session.mode !== "ai_vs_human");
@@ -32,15 +42,15 @@ export function Sidebar({
       <div className="border-b border-zinc-300 p-4">
         <div className="mb-3 rounded-md border border-zinc-300 bg-zinc-50 p-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
-            Council Room
+            Debate Coach
           </p>
           <p className="mt-2 text-sm leading-6 text-zinc-700">
-            Structured debate, tracked evidence, and team memory in one shared workspace.
+            Train like a debater, inspect the council, and keep real memory across the whole workspace.
           </p>
         </div>
         <div className="flex items-center justify-between gap-3">
           <div>
-            <h1 className="text-lg font-semibold text-zinc-950">AI Debate Council</h1>
+            <h1 className="text-lg font-semibold text-zinc-950">AI Debate Coach & Council</h1>
             <p className="text-sm text-zinc-600">{sessions.length}/{maxSessions} sessions</p>
           </div>
           <button
@@ -67,22 +77,40 @@ export function Sidebar({
       </div>
 
       <nav className="min-h-0 flex-1 overflow-y-auto p-3">
-        {sessions.length === 0 ? (
+        {sessions.length === 0 && workspaceView === "session" ? (
           <p className="px-2 py-3 text-sm text-zinc-600">Create a session to begin.</p>
         ) : null}
 
         <SessionGroup
           title="AI vs AI"
           sessions={aiSessions}
-          selectedId={selectedId}
+          selectedId={workspaceView === "session" ? selectedId : null}
           onSelect={onSelect}
         />
         <SessionGroup
           title="AI vs Human"
           sessions={practiceSessions}
-          selectedId={selectedId}
+          selectedId={workspaceView === "session" ? selectedId : null}
           onSelect={onSelect}
         />
+
+        <div className="mt-6 border-t border-zinc-200 pt-4">
+          <p className="mb-2 px-2 text-xs font-semibold uppercase text-zinc-500">
+            Global Intelligence
+          </p>
+          <div className="space-y-2">
+            <SidebarButton
+              label="AI Debater Experiences"
+              active={workspaceView === "aiExperiences"}
+              onClick={onAiExperiences}
+            />
+            <SidebarButton
+              label="User Debate Profile"
+              active={workspaceView === "userProfile"}
+              onClick={onUserProfile}
+            />
+          </div>
+        </div>
       </nav>
 
       <div className="border-t border-zinc-300 p-3">
@@ -90,18 +118,40 @@ export function Sidebar({
           type="button"
           onClick={onCouncilSettings}
           className={`flex w-full items-center justify-between rounded-md px-3 py-3 text-left text-sm font-semibold ${
-            councilSettingsActive
+            workspaceView === "councilSettings"
               ? "bg-zinc-950 text-white"
               : "text-zinc-800 hover:bg-zinc-100"
           }`}
         >
           <span>Council Settings</span>
-          <span aria-hidden="true" className="text-xl leading-none">
+          <span aria-hidden="true" className="text-2xl leading-none">
             ⚙
           </span>
         </button>
       </div>
     </aside>
+  );
+}
+
+function SidebarButton({
+  label,
+  active,
+  onClick
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`block w-full rounded-md px-3 py-3 text-left text-sm font-semibold ${
+        active ? "bg-zinc-950 text-white" : "text-zinc-800 hover:bg-zinc-100"
+      }`}
+    >
+      {label}
+    </button>
   );
 }
 

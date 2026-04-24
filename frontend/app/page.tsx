@@ -3,8 +3,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { DebateRoom, type RoomPanel } from "@/components/DebateRoom";
-import { Sidebar } from "@/components/Sidebar";
+import { GlobalWorkspace } from "@/components/GlobalWorkspace";
+import { Sidebar, type SidebarWorkspaceView } from "@/components/Sidebar";
 import {
+  getAiDebaterExperiences,
   clearSessionHistory,
   clearSessionMemory,
   createSession,
@@ -16,6 +18,7 @@ import {
   getPracticeState,
   getSessionAnalytics,
   getSessionIntelligence,
+  getUserDebateProfileOverview,
   getSessionSettings,
   listDebates,
   listMessages,
@@ -32,6 +35,7 @@ import {
   WS_BASE
 } from "@/lib/api";
 import type {
+  AgentExperienceOverview,
   ChatSession,
   CouncilSettings,
   DebateAnalytics,
@@ -43,7 +47,8 @@ import type {
   ModelsResponse,
   PracticeSettings,
   PracticeState,
-  SessionSettings
+  SessionSettings,
+  UserDebateProfileOverview
 } from "@/types";
 
 const MAX_SESSIONS = 10;
@@ -62,7 +67,7 @@ const DEFAULT_PRACTICE_SETTINGS: PracticeSettings = {
 
 function defaultNewChatDraft(modelName = ""): NewChatDraft {
   return {
-    mode: "ai_vs_ai",
+    mode: "ai_vs_human",
     overall_model: modelName,
     debaters_per_team: 2,
     practice_settings: { ...DEFAULT_PRACTICE_SETTINGS }
@@ -79,6 +84,7 @@ type NewChatDraft = {
 };
 
 export default function Home() {
+  const [workspaceView, setWorkspaceView] = useState<SidebarWorkspaceView>("session");
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [messagesBySession, setMessagesBySession] = useState<Record<string, DebateMessage[]>>({});
@@ -106,7 +112,10 @@ export default function Home() {
   const [teamPreparingBySession, setTeamPreparingBySession] = useState<Record<string, boolean>>({});
   const [models, setModels] = useState<ModelsResponse | null>(null);
   const [councilSettings, setCouncilSettings] = useState<CouncilSettings | null>(null);
-  const [showCouncilSettings, setShowCouncilSettings] = useState(false);
+  const [agentExperienceOverview, setAgentExperienceOverview] =
+    useState<AgentExperienceOverview | null>(null);
+  const [userProfileOverview, setUserProfileOverview] =
+    useState<UserDebateProfileOverview | null>(null);
   const [newChatOpen, setNewChatOpen] = useState(false);
   const [newChatTab, setNewChatTab] = useState<"mode" | "settings">("mode");
   const [newChatDraft, setNewChatDraft] = useState<NewChatDraft>(defaultNewChatDraft());
@@ -179,6 +188,18 @@ export default function Home() {
     return nextModels;
   }, []);
 
+  const refreshAgentExperienceOverview = useCallback(async () => {
+    const nextOverview = await getAiDebaterExperiences();
+    setAgentExperienceOverview(nextOverview);
+    return nextOverview;
+  }, []);
+
+  const refreshUserProfileOverview = useCallback(async () => {
+    const nextOverview = await getUserDebateProfileOverview();
+    setUserProfileOverview(nextOverview);
+    return nextOverview;
+  }, []);
+
   const refreshMessages = useCallback(async (sessionId: string) => {
     const nextMessages = await listMessages(sessionId);
     setMessagesBySession((current) => ({ ...current, [sessionId]: nextMessages }));
@@ -241,22 +262,26 @@ export default function Home() {
 
     async function boot() {
       try {
-        const [sessionList, modelData, councilData] = await Promise.all([
+        const [sessionList, modelData, councilData, experienceData, profileData] = await Promise.all([
           listSessions(),
           refreshModels(),
-          getCouncilSettings()
+          getCouncilSettings(),
+          refreshAgentExperienceOverview(),
+          refreshUserProfileOverview()
         ]);
         if (cancelled) {
           return;
         }
         setModels(modelData);
         setCouncilSettings(councilData);
+        setAgentExperienceOverview(experienceData);
+        setUserProfileOverview(profileData);
 
         setSessions(sessionList);
         setSelectedId(sessionList[0]?.id ?? null);
         recordRuntimeDiary(
           "frontend boot",
-          `Loaded ${sessionList.length} session(s) and ${modelData.available_model_count} verified model(s).`
+          `Loaded ${sessionList.length} session(s), ${modelData.available_model_count} verified model(s), and the global training overview.`
         );
       } catch (exc) {
         setError(exc instanceof Error ? exc.message : "Startup failed.");
@@ -271,7 +296,7 @@ export default function Home() {
     return () => {
       cancelled = true;
     };
-  }, [refreshModels]);
+  }, [refreshAgentExperienceOverview, refreshModels, refreshUserProfileOverview]);
 
   useEffect(() => {
     return () => {
@@ -316,10 +341,16 @@ export default function Home() {
     });
   }, [models, selectedId, settingsBySession]);
 
-  async function handleNewSession() {
-    setNewChatDraft(defaultNewChatDraft(models?.models[0]?.name || ""));
+  function openNewSessionModal(mode: ChatSession["mode"] = "ai_vs_ai") {
+    const base = defaultNewChatDraft(models?.models[0]?.name || "");
+    setNewChatDraft({ ...base, mode });
     setNewChatTab("mode");
     setNewChatOpen(true);
+    setWorkspaceView("session");
+  }
+
+  async function handleNewSession() {
+    openNewSessionModal("ai_vs_human");
   }
 
   async function handleCreateSessionFromDraft() {
@@ -340,7 +371,7 @@ export default function Home() {
       setStatusBySession((current) => ({ ...current, [created.id]: "Ready for a message." }));
       setPracticeStateBySession((current) => ({ ...current, [created.id]: { active: false } }));
       setActivePanel("chat");
-      setShowCouncilSettings(false);
+      setWorkspaceView("session");
       setNewChatOpen(false);
     } catch (exc) {
       setError(exc instanceof Error ? exc.message : "Could not create session.");
@@ -351,7 +382,7 @@ export default function Home() {
 
   function handleSelect(id: string) {
     setSelectedId(id);
-    setShowCouncilSettings(false);
+    setWorkspaceView("session");
     setPracticeStartTarget(null);
     setDeleteTarget(null);
     setClearTarget(null);
@@ -440,6 +471,8 @@ export default function Home() {
         setSelectedId(sessionList[0]?.id ?? null);
       }
       setDeleteTarget(null);
+      refreshAgentExperienceOverview().catch(() => undefined);
+      refreshUserProfileOverview().catch(() => undefined);
     } catch (exc) {
       const message = exc instanceof Error ? exc.message : "Could not delete session.";
       setDeleteError(message);
@@ -483,6 +516,8 @@ export default function Home() {
       setTeamPreparingBySession({});
       setDeleteAllOpen(false);
       await refreshSessions();
+      refreshAgentExperienceOverview().catch(() => undefined);
+      refreshUserProfileOverview().catch(() => undefined);
     } catch (exc) {
       const message = exc instanceof Error ? exc.message : "Could not delete all chats.";
       setDeleteAllError(message);
@@ -542,6 +577,8 @@ export default function Home() {
       }));
       setClearTarget(null);
       refreshSessions().catch(() => undefined);
+      refreshAgentExperienceOverview().catch(() => undefined);
+      refreshUserProfileOverview().catch(() => undefined);
     } catch (exc) {
       const message =
         exc instanceof Error
@@ -667,6 +704,7 @@ export default function Home() {
     if (selectedId) {
       await refreshIntelligence(selectedId, selectedDebateBySession[selectedId] || undefined);
     }
+    await refreshAgentExperienceOverview();
     return result;
   }
 
@@ -675,6 +713,7 @@ export default function Home() {
     if (selectedId) {
       await refreshPracticeState(selectedId);
     }
+    await refreshUserProfileOverview();
     return result;
   }
 
@@ -688,6 +727,7 @@ export default function Home() {
     }
     await submitDebateFeedback(selectedId, debateId, questionKey, answer.trim());
     await refreshIntelligence(selectedId, debateId);
+    refreshAgentExperienceOverview().catch(() => undefined);
   }
 
   async function handleVerdictReview(
@@ -849,7 +889,7 @@ export default function Home() {
     if (!content) {
       return;
     }
-    if ((draftBySession[selectedId] ?? "").length > USER_INPUT_MAX_CHARS) {
+    if (content.length > USER_INPUT_MAX_CHARS) {
       setError(`Please shorten your message to ${USER_INPUT_MAX_CHARS} characters or less.`);
       return;
     }
@@ -1055,6 +1095,7 @@ export default function Home() {
 
     if (event.type === "practice_completed") {
       setPracticeStateBySession((current) => ({ ...current, [sessionId]: { active: false } }));
+      refreshUserProfileOverview().catch(() => undefined);
       return;
     }
 
@@ -1080,6 +1121,8 @@ export default function Home() {
       refreshAnalytics(sessionId).catch(() => undefined);
       refreshIntelligence(sessionId).catch(() => undefined);
       refreshPracticeState(sessionId).catch(() => undefined);
+      refreshAgentExperienceOverview().catch(() => undefined);
+      refreshUserProfileOverview().catch(() => undefined);
       return;
     }
 
@@ -1089,6 +1132,8 @@ export default function Home() {
       setRunningBySession((current) => ({ ...current, [sessionId]: false }));
       socketRefs.current[sessionId]?.close();
       refreshModels().catch(() => undefined);
+      refreshAgentExperienceOverview().catch(() => undefined);
+      return;
     }
   }
 
@@ -1098,77 +1143,105 @@ export default function Home() {
         sessions={sessions}
         selectedId={selectedId}
         maxSessions={MAX_SESSIONS}
+        workspaceView={workspaceView}
         onNew={handleNewSession}
         onDeleteAll={() => {
           setDeleteAllError(null);
           setDeleteAllOpen(true);
         }}
         onSelect={handleSelect}
-        onCouncilSettings={() => {
-          setShowCouncilSettings(true);
+        onAiExperiences={() => {
+          setWorkspaceView("aiExperiences");
           setError(null);
         }}
-        councilSettingsActive={showCouncilSettings}
-      />
-      <DebateRoom
-        selectedSession={selectedSession}
-        messages={selectedMessages}
-        partialMessages={selectedPartials}
-        models={models}
-        topic={selectedDraft}
-        status={selectedStatus}
-        error={error}
-        assignments={selectedAssignments}
-        debates={selectedDebates}
-        selectedDebateId={selectedDebateId}
-        analytics={selectedAnalytics}
-        analyticsHistory={selectedAnalyticsHistory}
-        intelligence={selectedIntelligence}
-        practiceState={selectedPracticeState}
-        isTeamPreparing={selectedTeamPreparing}
-        showCouncilSettings={showCouncilSettings}
-        councilSettings={councilSettings}
-        settings={selectedSettings}
-        isRunning={selectedRunning}
-        selectedModelName={selectedModelName}
-        activePanel={activePanel}
-        renamingSessionId={renamingSessionId}
-        onPanelChange={setActivePanel}
-        onTopicChange={handleDraftChange}
-        onModelChange={handleModelChange}
-        onDebateChange={handleDebateChange}
-        onSend={handleSend}
-        onEndPractice={handleEndPracticeDebate}
-        onSettingsChange={handleUpdateSettings}
-        onCouncilSettingsChange={handleUpdateCouncilSettings}
-        onResetUniversalIdentities={handleResetUniversalIdentities}
-        onResetUserDebateProfile={handleResetUserDebateProfile}
-        onFeedbackSubmit={handleSubmitFeedback}
-        onVerdictReview={handleVerdictReview}
-        onRename={handleRename}
-        onRenameDebate={handleRenameDebate}
-        onDeleteRequest={(session) => {
-          if (councilSettings?.confirmation_preferences?.delete_chat) {
-            handleConfirmDelete(session).catch(() => undefined);
-            return;
-          }
-          setDeleteError(null);
-          setDeleteTarget(session);
+        onUserProfile={() => {
+          setWorkspaceView("userProfile");
+          setError(null);
         }}
-        onDeleteDebateRequest={(session, debate) => {
-          setDeleteDebateError(null);
-          setDeleteDebateTarget({ session, debate });
-        }}
-        onClearRequest={(session, mode) => {
-          const key = mode === "history" ? "clear_chat_history" : "clear_chat_memory";
-          if (councilSettings?.confirmation_preferences?.[key]) {
-            handleConfirmClear({ session, mode }).catch(() => undefined);
-            return;
-          }
-          setClearError(null);
-          setClearTarget({ session, mode });
+        onCouncilSettings={() => {
+          setWorkspaceView("councilSettings");
+          setError(null);
         }}
       />
+      {workspaceView === "aiExperiences" || workspaceView === "userProfile" ? (
+        <GlobalWorkspace
+          view={workspaceView === "aiExperiences" ? "aiExperiences" : "userProfile"}
+          sessions={sessions}
+          models={models}
+          experiences={agentExperienceOverview}
+          profileOverview={userProfileOverview}
+          onCreateSession={openNewSessionModal}
+        />
+      ) : workspaceView === "session" && !selectedSession ? (
+        <GlobalWorkspace
+          view="welcome"
+          sessions={sessions}
+          models={models}
+          experiences={agentExperienceOverview}
+          profileOverview={userProfileOverview}
+          onCreateSession={openNewSessionModal}
+        />
+      ) : (
+        <DebateRoom
+          selectedSession={selectedSession}
+          messages={selectedMessages}
+          partialMessages={selectedPartials}
+          models={models}
+          topic={selectedDraft}
+          status={selectedStatus}
+          error={error}
+          assignments={selectedAssignments}
+          debates={selectedDebates}
+          selectedDebateId={selectedDebateId}
+          analytics={selectedAnalytics}
+          analyticsHistory={selectedAnalyticsHistory}
+          intelligence={selectedIntelligence}
+          practiceState={selectedPracticeState}
+          isTeamPreparing={selectedTeamPreparing}
+          showCouncilSettings={workspaceView === "councilSettings"}
+          councilSettings={councilSettings}
+          settings={selectedSettings}
+          isRunning={selectedRunning}
+          selectedModelName={selectedModelName}
+          activePanel={activePanel}
+          renamingSessionId={renamingSessionId}
+          onPanelChange={setActivePanel}
+          onTopicChange={handleDraftChange}
+          onModelChange={handleModelChange}
+          onDebateChange={handleDebateChange}
+          onSend={handleSend}
+          onEndPractice={handleEndPracticeDebate}
+          onSettingsChange={handleUpdateSettings}
+          onCouncilSettingsChange={handleUpdateCouncilSettings}
+          onResetUniversalIdentities={handleResetUniversalIdentities}
+          onResetUserDebateProfile={handleResetUserDebateProfile}
+          onFeedbackSubmit={handleSubmitFeedback}
+          onVerdictReview={handleVerdictReview}
+          onRename={handleRename}
+          onRenameDebate={handleRenameDebate}
+          onDeleteRequest={(session) => {
+            if (councilSettings?.confirmation_preferences?.delete_chat) {
+              handleConfirmDelete(session).catch(() => undefined);
+              return;
+            }
+            setDeleteError(null);
+            setDeleteTarget(session);
+          }}
+          onDeleteDebateRequest={(session, debate) => {
+            setDeleteDebateError(null);
+            setDeleteDebateTarget({ session, debate });
+          }}
+          onClearRequest={(session, mode) => {
+            const key = mode === "history" ? "clear_chat_history" : "clear_chat_memory";
+            if (councilSettings?.confirmation_preferences?.[key]) {
+              handleConfirmClear({ session, mode }).catch(() => undefined);
+              return;
+            }
+            setClearError(null);
+            setClearTarget({ session, mode });
+          }}
+        />
+      )}
       {newChatOpen ? (
         <NewChatModal
           draft={newChatDraft}
@@ -1324,6 +1397,10 @@ function NewChatModal({
           <div className="mb-4">
             <p className="text-sm font-medium text-emerald-700">New chat</p>
             <h2 className="text-2xl font-semibold text-zinc-950">Create a session</h2>
+            <p className="mt-2 text-sm leading-6 text-zinc-600">
+              Training mode is the fastest way to feel the app's value. Council mode stays here
+              when you want to observe full team debates and inspect the intelligence layer.
+            </p>
           </div>
 
           {activeTab === "mode" ? (

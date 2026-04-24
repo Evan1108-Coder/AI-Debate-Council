@@ -196,6 +196,59 @@ class SessionSettingsTests(unittest.TestCase):
         self.assertIn("council_assistant", settings["agent_settings"])
         self.assertIn("judge", settings["agent_settings"])
 
+    def test_migration_repairs_judge_only_debates_marked_as_chat(self) -> None:
+        session = self.db.create_session(max_sessions=10)
+        debate = self.db.create_debate(session["id"], "Legacy judge-only debate")
+        self.db.add_message(
+            session_id=session["id"],
+            debate_id=debate["id"],
+            role="judge",
+            speaker="Judge",
+            model="mock-model",
+            content="WINNER: Pro",
+        )
+        with self.db.session(immediate=True) as connection:
+            connection.execute("UPDATE debates SET mode = 'chat' WHERE id = ?", (debate["id"],))
+
+        migrated = Database(self.db.path)
+        migrated.init()
+        repaired = migrated.list_debates(session["id"])
+
+        self.assertEqual(len(repaired), 1)
+        self.assertEqual(repaired[0]["id"], debate["id"])
+        self.assertEqual(repaired[0]["mode"], "debate")
+
+    def test_global_experience_list_includes_chat_and_universal_records(self) -> None:
+        session = self.db.create_session(max_sessions=10)
+        self.db.add_agent_experience(
+            scope="universal",
+            agent_id="pro_lead_advocate",
+            lesson_type="debate_activity",
+            lesson="Universal lesson",
+        )
+        self.db.add_agent_experience(
+            scope="chat",
+            session_id=session["id"],
+            agent_id="con_lead_advocate",
+            lesson_type="debate_activity",
+            lesson="Chat lesson",
+        )
+
+        rows = self.db.list_global_agent_experience(limit=10)
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual({row["scope"] for row in rows}, {"universal", "chat"})
+
+    def test_recent_global_debates_can_filter_to_practice(self) -> None:
+        session = self.db.create_session(max_sessions=10)
+        council_debate = self.db.create_debate(session["id"], "AI vs AI topic", mode="debate")
+        practice_debate = self.db.create_debate(session["id"], "Practice topic", mode="practice")
+
+        rows = self.db.list_recent_debates_global(modes=("practice",), limit=10)
+
+        self.assertEqual([row["id"] for row in rows], [practice_debate["id"]])
+        self.assertNotIn(council_debate["id"], [row["id"] for row in rows])
+
     def test_clear_history_hides_visible_messages_but_keeps_memory(self) -> None:
         session = self.db.create_session(max_sessions=10)
         debate = self.db.create_debate(session["id"], "Should AI debates be saved?")

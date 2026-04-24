@@ -30,6 +30,27 @@ export type UserDebateProfile = {
   last_updated_at: string;
 };
 
+export type UserDebateProfileOverview = {
+  profile: UserDebateProfile;
+  recent_practice_debates: Array<{
+    id: string;
+    session_id: string;
+    session_name: string;
+    name: string;
+    topic: string;
+    status: string;
+    winner: "pro" | "con" | "unclear";
+    human_side: "pro" | "con" | "auto";
+    practice_flow: "Free" | "Structured";
+    structured_rounds: number;
+    started_at: string;
+    finished_at: string | null;
+  }>;
+  recommendations: string[];
+  coach_summary: string;
+  less_practiced_side: "pro" | "con";
+};
+
 export type PracticeState = {
   active: boolean;
   debate_id?: string;
@@ -107,6 +128,30 @@ export type AgentExperienceRecord = {
   created_at: string;
   last_used_at: string | null;
   use_count: number;
+};
+
+export type AgentExperienceOverview = {
+  experiences: AgentExperienceRecord[];
+  memory_events: DebateIntelligenceRecord[];
+  summary: {
+    total_records: number;
+    distinct_agents: number;
+    universal_records: number;
+    chat_records: number;
+    high_confidence_records: number;
+    total_uses: number;
+    last_recorded_at: string;
+  };
+  by_agent: Array<{
+    agent_id: string;
+    record_count: number;
+    use_count: number;
+    high_confidence_count: number;
+    lesson_types: Record<string, number>;
+    last_recorded_at: string;
+  }>;
+  by_scope: Record<string, number>;
+  by_lesson_type: Record<string, number>;
 };
 
 export type DebateIntelligence = {

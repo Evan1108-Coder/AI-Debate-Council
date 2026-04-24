@@ -1691,6 +1691,30 @@ class Database:
                 ).fetchall()
             return [self._intelligence_row_to_dict(row) or {} for row in rows]
 
+    def list_global_intelligence_records(
+        self,
+        *,
+        record_types: tuple[str, ...] | None = None,
+        limit: int = 60,
+    ) -> list[dict]:
+        clauses = ["hidden_at IS NULL"]
+        params: list[object] = []
+        if record_types:
+            placeholders = ", ".join("?" for _ in record_types)
+            clauses.append(f"record_type IN ({placeholders})")
+            params.extend(record_types)
+        query = f"""
+            SELECT *
+            FROM debate_intelligence
+            WHERE {' AND '.join(clauses)}
+            ORDER BY updated_at DESC, created_at DESC
+            LIMIT ?
+        """
+        params.append(max(1, min(200, int(limit))))
+        with self.lock, self.session() as connection:
+            rows = connection.execute(query, tuple(params)).fetchall()
+            return [self._intelligence_row_to_dict(row) or {} for row in rows]
+
     def update_intelligence_record(
         self,
         record_id: str,
@@ -1821,6 +1845,44 @@ class Database:
         with self.lock, self.session() as connection:
             rows = connection.execute(query, tuple(params)).fetchall()
             return [self._experience_row_to_dict(row) or {} for row in rows]
+
+    def list_global_agent_experience(self, *, limit: int = 200) -> list[dict]:
+        with self.lock, self.session() as connection:
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM agent_experience
+                WHERE hidden_at IS NULL
+                ORDER BY COALESCE(last_used_at, created_at) DESC, created_at DESC
+                LIMIT ?
+                """,
+                (max(1, min(500, int(limit))),),
+            ).fetchall()
+            return [self._experience_row_to_dict(row) or {} for row in rows]
+
+    def list_recent_debates_global(
+        self,
+        *,
+        modes: tuple[str, ...] = ("debate", "practice"),
+        limit: int = 24,
+    ) -> list[dict]:
+        valid_modes = tuple(mode for mode in modes if mode in {"debate", "practice", "chat"})
+        if not valid_modes:
+            return []
+        placeholders = ", ".join("?" for _ in valid_modes)
+        with self.lock, self.session() as connection:
+            rows = connection.execute(
+                f"""
+                SELECT *
+                FROM debates
+                WHERE hidden_at IS NULL
+                  AND mode IN ({placeholders})
+                ORDER BY COALESCE(finished_at, started_at) DESC, started_at DESC
+                LIMIT ?
+                """,
+                (*valid_modes, max(1, min(200, int(limit)))),
+            ).fetchall()
+            return [debate_row_to_dict(row) or {} for row in rows]
 
     def reset_agent_experience(
         self,

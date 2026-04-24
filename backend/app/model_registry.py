@@ -199,35 +199,39 @@ async def verify_model_runtime(
             ),
             ttl_seconds=MODEL_RUNTIME_CACHE_TTL_SECONDS,
         )
-    try:
-        await acompletion(
-            model=route.litellm_model,
-            messages=[{"role": "user", "content": "Reply with OK."}],
-            api_key=route.api_key,
-            stream=False,
-            temperature=0.0,
-            max_tokens=4,
-            timeout=MODEL_RUNTIME_PROBE_TIMEOUT_SECONDS,
-        )
-        return _store_runtime_availability(
-            model,
-            route,
-            ModelAvailability(available=True, checked_at=time.time()),
-            ttl_seconds=MODEL_RUNTIME_CACHE_TTL_SECONDS,
-        )
-    except Exception as exc:
-        reason, ttl_seconds = _probe_error_reason(model, str(exc))
-        if any(
-            marker in reason.lower()
-            for marker in ("rejected", "denied", "unknown model", "authentication")
-        ):
-            mark_model_unavailable(model.name, reason, ttl_seconds=ttl_seconds)
-        return _store_runtime_availability(
-            model,
-            route,
-            ModelAvailability(available=False, reason=reason, checked_at=time.time()),
-            ttl_seconds=ttl_seconds,
-        )
+    last_exc: Exception | None = None
+    for candidate_model in (route.litellm_model, *route.fallback_models):
+        try:
+            await acompletion(
+                model=candidate_model,
+                messages=[{"role": "user", "content": "Reply with OK."}],
+                api_key=route.api_key,
+                stream=False,
+                temperature=0.0,
+                max_tokens=4,
+                timeout=MODEL_RUNTIME_PROBE_TIMEOUT_SECONDS,
+            )
+            return _store_runtime_availability(
+                model,
+                route,
+                ModelAvailability(available=True, checked_at=time.time()),
+                ttl_seconds=MODEL_RUNTIME_CACHE_TTL_SECONDS,
+            )
+        except Exception as exc:
+            last_exc = exc
+    assert last_exc is not None
+    reason, ttl_seconds = _probe_error_reason(model, str(last_exc))
+    if any(
+        marker in reason.lower()
+        for marker in ("rejected", "denied", "unknown model", "authentication")
+    ):
+        mark_model_unavailable(model.name, reason, ttl_seconds=ttl_seconds)
+    return _store_runtime_availability(
+        model,
+        route,
+        ModelAvailability(available=False, reason=reason, checked_at=time.time()),
+        ttl_seconds=ttl_seconds,
+    )
 
 
 async def verify_models_runtime(models: list["SupportedModel"]) -> dict[str, "ModelAvailability"]:
@@ -281,7 +285,10 @@ class SupportedModel:
             return None
         direct_key = self.direct_api_key
         if direct_key:
-            return ModelRoute(self.litellm_model, direct_key, "provider")
+            fallback_models: tuple[str, ...] = ()
+            if self.provider == "moonshot":
+                fallback_models = (self.name,)
+            return ModelRoute(self.litellm_model, direct_key, "provider", fallback_models)
         return None
 
     @property

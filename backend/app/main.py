@@ -192,6 +192,61 @@ def get_user_debate_profile() -> dict:
     return db.get_user_debate_profile()
 
 
+@app.get("/api/user-debate-profile/overview")
+def get_user_debate_profile_overview() -> dict:
+    profile = db.get_user_debate_profile()
+    sessions = {session["id"]: session for session in db.list_sessions()}
+    recent_debates = []
+    for debate in db.list_recent_debates_global(modes=("practice",), limit=18):
+        session = sessions.get(debate["session_id"]) or {}
+        metadata = debate.get("metadata") if isinstance(debate.get("metadata"), dict) else {}
+        recent_debates.append(
+            {
+                "id": debate["id"],
+                "session_id": debate["session_id"],
+                "session_name": session.get("name") or "Unknown Session",
+                "name": debate["name"],
+                "topic": debate["topic"],
+                "status": debate["status"],
+                "winner": debate_manager._detect_winner(debate.get("judge_summary") or ""),
+                "human_side": str(metadata.get("human_side") or "").lower() or "auto",
+                "practice_flow": metadata.get("practice_flow") or "Free",
+                "structured_rounds": int(metadata.get("structured_rounds") or 0),
+                "started_at": debate["started_at"],
+                "finished_at": debate.get("finished_at"),
+            }
+        )
+    practice_total = int(profile.get("practice_debates_completed", 0) or 0)
+    decided_total = sum(int((profile.get("wins") or {}).get(side, 0) or 0) for side in ("pro", "con"))
+    less_practiced_side = "con"
+    side_history = profile.get("side_history") if isinstance(profile.get("side_history"), dict) else {}
+    if int(side_history.get("con", 0) or 0) > int(side_history.get("pro", 0) or 0):
+        less_practiced_side = "pro"
+    recommendations = []
+    if practice_total == 0:
+        recommendations.append("Start with one AI vs Human training chat and finish a full debate so the coach has real data.")
+    if profile.get("weaknesses"):
+        recommendations.append(f"Primary improvement target: {profile['weaknesses'][-1]}")
+    if profile.get("strengths"):
+        recommendations.append(f"Protect this strength while training harder: {profile['strengths'][-1]}")
+    if practice_total > 0:
+        recommendations.append(f"Practice the {less_practiced_side.upper()} side next to keep your side history balanced.")
+    if not recommendations:
+        recommendations.append("No reliable training recommendation yet. Finish one practice debate first.")
+    coach_summary = (
+        f"Practice debates completed: {practice_total}. "
+        f"Decided wins: {decided_total}. "
+        f"Most recent coaching note: {profile.get('trainer_notes', ['No trainer notes yet.'])[-1]}"
+    )
+    return {
+        "profile": profile,
+        "recent_practice_debates": recent_debates,
+        "recommendations": recommendations[:5],
+        "coach_summary": coach_summary,
+        "less_practiced_side": less_practiced_side,
+    }
+
+
 @app.post("/api/user-debate-profile/reset")
 def reset_user_debate_profile(payload: ResetUserDebateProfileRequest) -> dict:
     phrase = payload.confirmation.strip()
@@ -211,6 +266,71 @@ def record_runtime_diary(payload: dict) -> dict:
     session_id = str(payload.get("session_id") or "").strip() or None
     runtime_diary.record(source, event, detail, session_id=session_id)
     return {"ok": True}
+
+
+@app.get("/api/ai-debater-experiences")
+def get_ai_debater_experiences() -> dict:
+    experiences = db.list_global_agent_experience(limit=400)
+    memory_events = db.list_global_intelligence_records(
+        record_types=("memory_saved", "post_debate_review", "judge_scorecard"),
+        limit=40,
+    )
+    by_agent: dict[str, dict] = {}
+    by_scope = {"universal": 0, "chat": 0}
+    by_lesson_type: dict[str, int] = {}
+    high_confidence = 0
+    total_uses = 0
+    last_recorded_at = ""
+    for item in experiences:
+        scope = "chat" if item.get("scope") == "chat" else "universal"
+        by_scope[scope] += 1
+        lesson_type = str(item.get("lesson_type") or "unknown")
+        by_lesson_type[lesson_type] = by_lesson_type.get(lesson_type, 0) + 1
+        if item.get("confidence") == "high":
+            high_confidence += 1
+        total_uses += int(item.get("use_count", 0) or 0)
+        created_at = str(item.get("created_at") or "")
+        if created_at > last_recorded_at:
+            last_recorded_at = created_at
+        agent_id = str(item.get("agent_id") or "council")
+        summary = by_agent.setdefault(
+            agent_id,
+            {
+                "agent_id": agent_id,
+                "record_count": 0,
+                "use_count": 0,
+                "high_confidence_count": 0,
+                "lesson_types": {},
+                "last_recorded_at": "",
+            },
+        )
+        summary["record_count"] += 1
+        summary["use_count"] += int(item.get("use_count", 0) or 0)
+        if item.get("confidence") == "high":
+            summary["high_confidence_count"] += 1
+        summary["lesson_types"][lesson_type] = summary["lesson_types"].get(lesson_type, 0) + 1
+        if created_at > summary["last_recorded_at"]:
+            summary["last_recorded_at"] = created_at
+    by_agent_rows = sorted(
+        by_agent.values(),
+        key=lambda row: (-int(row["record_count"]), -int(row["use_count"]), row["agent_id"]),
+    )
+    return {
+        "experiences": experiences,
+        "memory_events": memory_events,
+        "summary": {
+            "total_records": len(experiences),
+            "distinct_agents": len(by_agent_rows),
+            "universal_records": by_scope["universal"],
+            "chat_records": by_scope["chat"],
+            "high_confidence_records": high_confidence,
+            "total_uses": total_uses,
+            "last_recorded_at": last_recorded_at,
+        },
+        "by_agent": by_agent_rows,
+        "by_scope": by_scope,
+        "by_lesson_type": by_lesson_type,
+    }
 
 
 @app.get("/api/sessions", response_model=list[ChatSession])

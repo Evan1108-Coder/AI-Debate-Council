@@ -5,6 +5,7 @@ import unittest
 
 from fastapi import WebSocketDisconnect
 
+from backend.app.costing import CostTracker
 from backend.app.database import Database
 from backend.app.debate import ClientDisconnectedError, DebateManager, StreamingSanitizer
 from backend.app.model_registry import MOCK_MODEL
@@ -367,6 +368,110 @@ class DebateArchitectureTests(unittest.TestCase):
 
         self.assertTrue(pro_summary.startswith("WINNER: Pro\nReason:"))
         self.assertTrue(con_summary.startswith("WINNER: Con\nReason:"))
+
+    def test_weighted_verdict_explains_tie_threshold_when_result_is_unclear(self) -> None:
+        summary = self.manager._compose_panel_consensus_summary(
+            topic="Should cities ban private cars downtown?",
+            panel_summaries=[
+                "WINNER: Pro\nReason: Pro answered the burden more directly.",
+                "WINNER: Pro\nReason: Pro kept the stronger clash on the burden.",
+                "WINNER: Con\nReason: Con had the stronger feasibility case.",
+            ],
+            analysis={
+                "bayesian": {"probabilities": {"support": 0.0, "oppose": 1.0, "mixed": 0.0}},
+            },
+            session_settings={
+                "judging_settings": {
+                    "judge_panel_size": 3,
+                    "analytics_weight": 0.25,
+                    "allow_user_verdict_challenge": True,
+                }
+            },
+        )
+
+        self.assertIn("tie threshold", summary)
+        self.assertIn("0.04", summary)
+
+    def test_practice_total_cost_summary_aggregates_saved_turn_costs(self) -> None:
+        session = self.db.create_session(max_sessions=10)
+        debate = self.db.create_debate(session["id"], "Practice cost test", mode="practice")
+        self.db.add_message(
+            session_id=session["id"],
+            debate_id=debate["id"],
+            role="practice_user",
+            speaker="You",
+            model="user",
+            content="Opening practice turn",
+            cost_summary={
+                "currency": "USD",
+                "total": 0.01,
+                "total_usd": 0.01,
+                "input_tokens": 10,
+                "output_tokens": 0,
+                "calls": 1,
+                "models": [
+                    {
+                        "model": "practice-user",
+                        "input_tokens": 10,
+                        "output_tokens": 0,
+                        "calls": 1,
+                        "cost": 0.01,
+                        "cost_usd": 0.01,
+                        "input_usd_per_1m": 0.0,
+                        "output_usd_per_1m": 0.0,
+                        "pricing_source": "test",
+                        "pricing_live": False,
+                        "pricing_available": True,
+                    }
+                ],
+                "estimated": True,
+                "pricing_complete": True,
+                "warnings": [],
+                "rate_source": "test",
+            },
+        )
+        self.db.add_message(
+            session_id=session["id"],
+            debate_id=debate["id"],
+            role="practice_debater",
+            speaker="Practice Debater",
+            model="mock-model",
+            content="Practice response",
+            cost_summary={
+                "currency": "USD",
+                "total": 0.02,
+                "total_usd": 0.02,
+                "input_tokens": 20,
+                "output_tokens": 30,
+                "calls": 1,
+                "models": [
+                    {
+                        "model": "mock-model",
+                        "input_tokens": 20,
+                        "output_tokens": 30,
+                        "calls": 1,
+                        "cost": 0.02,
+                        "cost_usd": 0.02,
+                        "input_usd_per_1m": 0.0,
+                        "output_usd_per_1m": 0.0,
+                        "pricing_source": "test",
+                        "pricing_live": False,
+                        "pricing_available": True,
+                    }
+                ],
+                "estimated": True,
+                "pricing_complete": True,
+                "warnings": [],
+                "rate_source": "test",
+            },
+        )
+
+        summary = self.manager._debate_total_cost_summary(
+            session["id"], debate["id"], CostTracker(), "USD"
+        )
+
+        self.assertAlmostEqual(summary["total"], 0.03, places=8)
+        self.assertEqual(summary["calls"], 2)
 
     def test_mock_stream_treats_closed_websocket_as_client_disconnect(self) -> None:
         class ClosedSocket:

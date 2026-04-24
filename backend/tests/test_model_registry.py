@@ -93,6 +93,22 @@ class ModelRegistryTests(unittest.TestCase):
         self.assertIn("rejected this model name or endpoint", availability.reason or "")
         self.assertNotIn("kimi-k2-turbo-preview", available_names)
 
+    def test_verify_model_runtime_can_fall_back_to_raw_moonshot_model_name(self) -> None:
+        completion = AsyncMock(
+            side_effect=[
+                RuntimeError("MoonshotException - Not found the model moonshot/kimi-latest | 404"),
+                {"choices": [{"message": {"content": "OK"}}]},
+            ]
+        )
+        with patch.dict(os.environ, {"MOONSHOT_API_KEY": "test-key"}, clear=True), patch(
+            "backend.app.model_registry.acompletion", completion
+        ):
+            availability = asyncio.run(verify_model_runtime(MODEL_MAP["kimi-latest"]))
+
+        self.assertTrue(availability.available)
+        attempted_models = [call.kwargs["model"] for call in completion.await_args_list]
+        self.assertEqual(attempted_models, ["moonshot/kimi-latest", "kimi-latest"])
+
 
 if __name__ == "__main__":
     unittest.main()
