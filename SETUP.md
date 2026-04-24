@@ -106,7 +106,7 @@ You only need to do this once. macOS remembers your choice.
 
 ### Step 8: Using the App
 
-The app starts the backend (port 8000) and frontend (port 6001) as invisible background processes — no terminal window or console box appears. A splash screen with window controls (close/minimize/maximize on macOS, close button on Windows) is shown while the servers start. Closing the splash screen during startup cleanly quits the app and all background processes. Once the servers are ready, the main window opens automatically.
+The app starts the backend (port 8000) and frontend (port 6001) as invisible background processes — no terminal window or console box appears. You do not need a terminal open to launch the app; just open it from Applications (macOS) or the Start Menu (Windows). A frameless splash screen with a close button is shown while the servers start. Closing the splash screen during startup cleanly quits the app and all background processes. Once the servers are ready, the main window opens automatically.
 
 Click the **+** button in the sidebar to create your first session. The setup modal lets you choose:
 

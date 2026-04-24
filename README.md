@@ -474,7 +474,7 @@ In practice mode, send `{"type": "end_practice_debate", "model": "model-name"}` 
 
 ## Desktop App (This Branch)
 
-This branch (`master-app-interface`) wraps the web application in an Electron shell that runs as a native desktop app on macOS and Windows. The app starts the Python backend and Next.js frontend as invisible background processes — no terminal window or console box appears during startup. A splash screen with native window controls (close, minimize, maximize on macOS; close button on Windows) is shown while the servers start. Closing the splash screen during startup cleanly terminates all background processes.
+This branch (`master-app-interface`) wraps the web application in an Electron shell that runs as a native desktop app on macOS and Windows. The app starts the Python backend and Next.js frontend as invisible background processes — no terminal window or console box appears during startup. The app can be launched directly from Finder or the Start Menu; no terminal needs to be open. A frameless splash screen with a close button is shown while the servers start. Closing the splash screen during startup cleanly terminates all background processes.
 
 ### Pre-built Installers
 

@@ -28,6 +28,38 @@ function getNpmCommand() {
   return process.platform === "win32" ? "npm.cmd" : "npm";
 }
 
+function getEnhancedEnv() {
+  const env = { ...process.env };
+  if (process.platform === "darwin") {
+    const extraPaths = [
+      "/opt/homebrew/bin",
+      "/opt/homebrew/sbin",
+      "/usr/local/bin",
+      "/usr/local/sbin",
+      path.join(process.env.HOME || "", ".nvm/versions/node"),
+      "/usr/bin",
+      "/bin",
+      "/usr/sbin",
+      "/sbin",
+    ];
+    const nvmDir = path.join(process.env.HOME || "", ".nvm/versions/node");
+    try {
+      const versions = fs.readdirSync(nvmDir);
+      if (versions.length > 0) {
+        versions.sort().reverse();
+        extraPaths.unshift(path.join(nvmDir, versions[0], "bin"));
+      }
+    } catch (_) {}
+    const currentPath = env.PATH || "/usr/bin:/bin:/usr/sbin:/sbin";
+    const pathSet = new Set(currentPath.split(":"));
+    for (const p of extraPaths) {
+      pathSet.add(p);
+    }
+    env.PATH = Array.from(pathSet).join(":");
+  }
+  return env;
+}
+
 function isPortInUse(port) {
   return new Promise((resolve) => {
     const server = net.createServer();
@@ -72,16 +104,10 @@ function createSplashWindow() {
     maximizable: false,
     fullscreenable: false,
     alwaysOnTop: true,
-    ...(isMac
-      ? {
-          titleBarStyle: "hiddenInset",
-          trafficLightPosition: { x: 14, y: 14 },
-        }
-      : {
-          frame: false,
-        }),
+    frame: false,
     transparent: true,
     backgroundColor: "#00000000",
+    hasShadow: false,
     webPreferences: {
       nodeIntegration: true,
       contextIsolation: false,
@@ -117,30 +143,30 @@ function createSplashWindow() {
           border-radius: 24px;
           padding: 48px 40px 40px;
           text-align: center;
-          border: 1px solid rgba(255, 255, 255, 0.12);
-          box-shadow: 0 32px 64px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+          border: none;
+          box-shadow: 0 32px 64px rgba(0, 0, 0, 0.5);
           width: 380px;
           position: relative;
         }
-        .win-close {
-          display: ${isMac ? "none" : "flex"};
+        .close-btn {
+          display: flex;
           position: absolute;
           top: 12px;
-          right: 12px;
-          width: 28px;
-          height: 28px;
+          ${isMac ? "left: 14px;" : "right: 12px;"}
+          width: ${isMac ? "14px" : "28px"};
+          height: ${isMac ? "14px" : "28px"};
           align-items: center;
           justify-content: center;
-          border-radius: 6px;
+          border-radius: ${isMac ? "50%" : "6px"};
           border: none;
-          background: rgba(255, 255, 255, 0.08);
-          color: rgba(255, 255, 255, 0.6);
-          font-size: 16px;
+          background: ${isMac ? "rgba(255, 90, 95, 0.85)" : "rgba(255, 255, 255, 0.08)"};
+          color: ${isMac ? "transparent" : "rgba(255, 255, 255, 0.6)"};
+          font-size: ${isMac ? "10px" : "16px"};
           cursor: pointer;
           -webkit-app-region: no-drag;
           transition: background 0.15s, color 0.15s;
         }
-        .win-close:hover { background: rgba(232, 17, 35, 0.9); color: #fff; }
+        .close-btn:hover { background: ${isMac ? "rgba(255, 70, 75, 1)" : "rgba(232, 17, 35, 0.9)"}; color: ${isMac ? "rgba(80,0,0,0.7)" : "#fff"}; }
         .icon {
           font-size: 56px;
           margin-bottom: 16px;
@@ -181,7 +207,7 @@ function createSplashWindow() {
     </head>
     <body>
       <div class="splash">
-        <button class="win-close" onclick="window.close()">\u00D7</button>
+        <button class="close-btn" onclick="window.close()">\u00D7</button>
         <div class="icon">\u{1F3DB}\u{FE0F}</div>
         <h1>AI Debate Council</h1>
         <p class="status">Starting servers\u2026</p>
@@ -318,7 +344,7 @@ async function startBackend() {
     return;
   }
 
-  const env = { ...process.env, PYTHONUNBUFFERED: "1" };
+  const env = { ...getEnhancedEnv(), PYTHONUNBUFFERED: "1" };
 
   backendProcess = spawn(
     python,
@@ -358,10 +384,13 @@ async function startFrontend() {
   const npm = getNpmCommand();
   const frontendDir = path.join(projectRoot, "frontend");
 
+  const env = getEnhancedEnv();
+
   if (!fs.existsSync(path.join(frontendDir, "node_modules"))) {
     console.log("Installing frontend dependencies...");
     const install = spawn(npm, ["install"], {
       cwd: frontendDir,
+      env,
       stdio: ["ignore", "pipe", "pipe"],
       shell: true,
       windowsHide: true,
@@ -386,7 +415,7 @@ async function startFrontend() {
   if (fs.existsSync(builtDir)) {
     frontendProcess = spawn(nextBin, ["start", "-p", String(FRONTEND_PORT)], {
       cwd: frontendDir,
-      env: process.env,
+      env,
       stdio: ["ignore", "pipe", "pipe"],
       shell: process.platform === "win32",
       windowsHide: true,
@@ -394,7 +423,7 @@ async function startFrontend() {
   } else {
     frontendProcess = spawn(nextBin, ["dev", "-p", String(FRONTEND_PORT)], {
       cwd: frontendDir,
-      env: process.env,
+      env,
       stdio: ["ignore", "pipe", "pipe"],
       shell: process.platform === "win32",
       windowsHide: true,

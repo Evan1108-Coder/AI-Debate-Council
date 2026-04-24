@@ -857,11 +857,21 @@ cd "$env:LOCALAPPDATA\Programs\ai-debate-council\resources\app-content"
 python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8000
 ```
 
-### Splash Screen Has No Window Controls
+### Splash Screen Has No Close Button
 
-The splash screen should show native close/minimize/maximize buttons on macOS (traffic lights) and a close button on Windows. If you do not see these, you may be running an older version of the app. Download the latest installer from [Releases](https://github.com/Evan1108-Coder/AI-Debate-Council/releases).
+The splash screen should show a close button (red circle on macOS, × button on Windows). If you do not see it, you may be running an older version of the app. Download the latest installer from [Releases](https://github.com/Evan1108-Coder/AI-Debate-Council/releases).
 
 Closing the splash screen during startup cleanly quits the app and terminates all background server processes.
+
+### App Only Works When Terminal Is Open
+
+If the app fails to start servers unless a terminal window is open, the app may not be finding Python or Node.js. The app includes PATH detection for common install locations (`/opt/homebrew/bin`, `/usr/local/bin`, nvm directories), but if your tools are installed in non-standard locations, launch the app from a terminal instead:
+
+```bash
+open /Applications/AI\ Debate\ Council.app
+```
+
+This inherits your shell's full PATH. If the problem persists, verify that Python 3 and Node.js are installed and accessible.
 
 ### App Window Is Blank
 
