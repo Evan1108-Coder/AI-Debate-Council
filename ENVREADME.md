@@ -2,6 +2,14 @@
 
 This document explains every environment variable used by AI Debate Council. For installation steps, see [SETUP.md](SETUP.md).
 
+## Where to Put the .env File (Desktop App)
+
+In the desktop app, the `.env` file goes inside the app content directory:
+
+- **macOS**: `/Applications/AI Debate Council.app/Contents/Resources/app-content/.env`
+- **Windows**: `%LOCALAPPDATA%\Programs\ai-debate-council\resources\app-content\.env`
+- **Building from source**: `<project-root>/.env` (same as the web version)
+
 ## How Environment Files Work
 
 The backend loads environment variables in this order:
@@ -12,7 +20,7 @@ The backend loads environment variables in this order:
 
 This means the `.env` files always win over shell-level variables. This is intentional: it prevents a stale API key in your shell from silently unlocking a provider you left blank in `.env`.
 
-**For most setups, you only need one `.env` file at the project root.** The `backend/.env` exists for cases where you want backend-specific overrides.
+**For most setups, you only need one `.env` file at the project root (or the app content directory in the desktop app).** The `backend/.env` exists for cases where you want backend-specific overrides.
 
 ## Quick Setup
 

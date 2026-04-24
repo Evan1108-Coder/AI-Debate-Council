@@ -1,8 +1,10 @@
-# AI Debate Council
+# AI Debate Council — Desktop App
 
-AI Debate Council is a full-stack web application where two AI teams — Pro and Con — debate any topic you choose in real time, or where you can practice debating directly against an AI opponent. Each AI team fields up to four specialist debaters with distinct roles. After the debate, an optional Judge Assistant audits the transcript for missed points, and the Judge system can use either one Judge or a 3/5-person judge panel with analytics-weighted scoring. The entire exchange streams token by token over WebSockets so you can watch it unfold live.
+> **This is the `master-app-interface` branch** — the Electron desktop application (macOS `.dmg` / Windows `.exe`). For the web version that runs in your browser, see the [`master-website-interface`](https://github.com/Evan1108-Coder/AI-Debate-Council/tree/master-website-interface) branch.
 
-The backend is Python 3.13, FastAPI, SQLite, WebSockets, and LiteLLM. The frontend is Next.js, React, TypeScript, and Tailwind CSS.
+AI Debate Council is a multi-AI debate system where two AI teams — Pro and Con — debate any topic you choose in real time, or where you can practice debating directly against an AI opponent. This branch packages the application as a native desktop app using Electron. The app starts the Python backend and Next.js frontend automatically and displays the UI in a native window.
+
+The backend is Python 3.13, FastAPI, SQLite, WebSockets, and LiteLLM. The frontend is Next.js, React, TypeScript, and Tailwind CSS. The desktop shell is Electron.
 
 ## Table of Contents
 
@@ -182,6 +184,14 @@ The backend is a single Python process. All state lives in SQLite. The active-de
 │   ├── tailwind.config.ts
 │   ├── postcss.config.mjs
 │   └── tsconfig.json
+├── electron/
+│   ├── main.js                  # Electron main process: starts servers, splash screen
+│   ├── package.json             # Electron + electron-builder configuration
+│   └── icons/
+│       ├── icon.svg             # Source icon (liquid glass design)
+│       ├── icon.png             # 1024x1024 PNG
+│       ├── icon.icns            # macOS icon
+│       └── icon.ico             # Windows icon
 ├── .env.example
 ├── .gitignore
 ├── LICENSE
