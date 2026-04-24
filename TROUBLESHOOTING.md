@@ -851,13 +851,22 @@ If the Electron window opens but shows nothing:
 
 ### "macOS Cannot Verify That This App Is Free From Malware"
 
-The app is not code-signed with an Apple Developer certificate. To open it:
+The app is not code-signed with an Apple Developer certificate. This is normal for indie and open-source apps. Use one of the two methods below to open it:
+
+**Method 1 (Right-click):**
 
 1. Right-click (or Ctrl+click) the app in Applications.
 2. Select "Open" from the context menu.
-3. Click "Open" in the dialog.
+3. Click "Open" in the dialog that appears.
 
-You only need to do this once. macOS remembers your choice.
+**Method 2 (System Settings):**
+
+1. Open **System Settings** → **Privacy & Security**.
+2. Scroll down to the Security section. You will see a message saying "AI Debate Council" was blocked.
+3. Click **Open Anyway**.
+4. Enter your password when prompted.
+
+You only need to do this once. macOS remembers your choice after the first approval.
 
 ### Ports Already In Use
 

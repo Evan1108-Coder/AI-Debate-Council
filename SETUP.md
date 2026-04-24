@@ -89,11 +89,20 @@ Open **AI Debate Council** from Applications.
 
 If macOS shows "Cannot verify that this app is free from malware":
 
+**Method 1 (Right-click):**
+
 1. Right-click (or Ctrl+click) the app in Applications.
 2. Select "Open" from the context menu.
 3. Click "Open" in the dialog.
 
-You only need to do this once.
+**Method 2 (System Settings):**
+
+1. Open **System Settings** → **Privacy & Security**.
+2. Scroll down to the Security section. You will see a message saying "AI Debate Council" was blocked.
+3. Click **Open Anyway**.
+4. Enter your password when prompted.
+
+You only need to do this once. macOS remembers your choice.
 
 ### Step 8: Using the App
 
