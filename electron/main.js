@@ -63,17 +63,36 @@ function waitForServer(url, timeoutMs = 60000) {
 }
 
 function createSplashWindow() {
+  const isMac = process.platform === "darwin";
+
   splashWindow = new BrowserWindow({
-    width: 400,
-    height: 300,
-    frame: false,
-    transparent: true,
+    width: 420,
+    height: 320,
     resizable: false,
+    maximizable: false,
+    fullscreenable: false,
     alwaysOnTop: true,
+    ...(isMac
+      ? {
+          titleBarStyle: "hiddenInset",
+          trafficLightPosition: { x: 14, y: 14 },
+        }
+      : {
+          frame: false,
+        }),
+    transparent: true,
+    backgroundColor: "#00000000",
     webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
+      nodeIntegration: true,
+      contextIsolation: false,
     },
+  });
+
+  splashWindow.on("close", () => {
+    if (mainWindow === null) {
+      cleanup();
+      app.quit();
+    }
   });
 
   const splashHtml = `
@@ -92,16 +111,36 @@ function createSplashWindow() {
           -webkit-app-region: drag;
         }
         .splash {
-          background: rgba(20, 20, 30, 0.92);
+          background: rgba(20, 20, 30, 0.95);
           backdrop-filter: blur(40px) saturate(1.8);
           -webkit-backdrop-filter: blur(40px) saturate(1.8);
           border-radius: 24px;
-          padding: 48px 40px;
+          padding: 48px 40px 40px;
           text-align: center;
           border: 1px solid rgba(255, 255, 255, 0.12);
           box-shadow: 0 32px 64px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.08);
-          width: 360px;
+          width: 380px;
+          position: relative;
         }
+        .win-close {
+          display: ${isMac ? "none" : "flex"};
+          position: absolute;
+          top: 12px;
+          right: 12px;
+          width: 28px;
+          height: 28px;
+          align-items: center;
+          justify-content: center;
+          border-radius: 6px;
+          border: none;
+          background: rgba(255, 255, 255, 0.08);
+          color: rgba(255, 255, 255, 0.6);
+          font-size: 16px;
+          cursor: pointer;
+          -webkit-app-region: no-drag;
+          transition: background 0.15s, color 0.15s;
+        }
+        .win-close:hover { background: rgba(232, 17, 35, 0.9); color: #fff; }
         .icon {
           font-size: 56px;
           margin-bottom: 16px;
@@ -142,6 +181,7 @@ function createSplashWindow() {
     </head>
     <body>
       <div class="splash">
+        <button class="win-close" onclick="window.close()">\u00D7</button>
         <div class="icon">\u{1F3DB}\u{FE0F}</div>
         <h1>AI Debate Council</h1>
         <p class="status">Starting servers\u2026</p>
@@ -291,7 +331,7 @@ async function startBackend() {
       "--port",
       String(BACKEND_PORT),
     ],
-    { cwd: projectRoot, env, stdio: ["ignore", "pipe", "pipe"] }
+    { cwd: projectRoot, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true }
   );
 
   backendProcess.stdout.on("data", (data) => {
@@ -322,8 +362,15 @@ async function startFrontend() {
     console.log("Installing frontend dependencies...");
     const install = spawn(npm, ["install"], {
       cwd: frontendDir,
-      stdio: "inherit",
+      stdio: ["ignore", "pipe", "pipe"],
       shell: true,
+      windowsHide: true,
+    });
+    install.stdout.on("data", (data) => {
+      process.stdout.write(`[npm] ${data}`);
+    });
+    install.stderr.on("data", (data) => {
+      process.stderr.write(`[npm] ${data}`);
     });
     await new Promise((resolve, reject) => {
       install.on("exit", (code) => {
@@ -342,6 +389,7 @@ async function startFrontend() {
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
       shell: process.platform === "win32",
+      windowsHide: true,
     });
   } else {
     frontendProcess = spawn(nextBin, ["dev", "-p", String(FRONTEND_PORT)], {
@@ -349,6 +397,7 @@ async function startFrontend() {
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
       shell: process.platform === "win32",
+      windowsHide: true,
     });
   }
 
@@ -370,7 +419,7 @@ function stopProcess(proc) {
   if (!proc || proc.killed) return;
   try {
     if (process.platform === "win32") {
-      spawn("taskkill", ["/pid", String(proc.pid), "/f", "/t"]);
+      spawn("taskkill", ["/pid", String(proc.pid), "/f", "/t"], { windowsHide: true });
     } else {
       proc.kill("SIGTERM");
     }
