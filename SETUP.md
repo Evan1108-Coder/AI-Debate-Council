@@ -136,12 +136,43 @@ Once the app opens, you need to add at least one AI provider API key:
 
 One API key unlocks all models from that provider. See [ENVREADME.md](ENVREADME.md) for the full list of 21 models across 6 providers.
 
-### Step 7: Start Using the App
+### Step 7: What You'll See (Welcome Screen)
 
-1. Click the **+** button in the sidebar to create a new session
-2. Choose **AI vs AI Debate** or **AI vs Human Debate Training**
-3. Select a model from the **Overall Model** dropdown
-4. Type a debate topic and press Enter!
+When the app finishes loading, you'll see a welcome screen like this:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│  DEBATE COACH                                               │
+│  AI Debate Coach & Council               [New] button       │
+│  0/10 sessions                                              │
+│                                                             │
+│  "Create a session to begin."                               │
+│                                                             │
+│  ┌─────────────────┐  ┌──────────────────┐  First 60 secs  │
+│  │ AI vs Human     │  │ AI vs AI Debate  │  Verified: 0    │
+│  │ Debate Training │  │                  │  Providers: 0   │
+│  │ [RECOMMENDED]   │  │ [COUNCIL LAB]    │                  │
+│  │                 │  │                  │  1. Create chat  │
+│  │ Start Training  │  │ Start Council    │  2. Pick model   │
+│  │ Chat            │  │ Chat             │  3. Type topic   │
+│  └─────────────────┘  └──────────────────┘                  │
+│                                                             │
+│  Provider readiness: OpenAI [Locked], Anthropic [Locked]... │
+│  Council Settings ⚙                                        │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**Don't panic if you see "Verified Models: 0" and "Providers Ready: 0".** This is normal — it means you haven't added API keys yet (Step 6). The app works fine; you just need to add at least one API key or enable mock mode.
+
+### Step 8: Start Your First Debate
+
+1. Click **Start Training Chat** (recommended for beginners) or **Start Council Chat**
+2. Pick a verified model from the **Overall Model** dropdown
+   - If the dropdown is empty, you need to add an API key (Step 6) or enable mock mode
+3. Type a clear debate topic, like "Should schools ban phones in class?"
+4. Press Enter and watch the debate unfold!
+
+**Quick start with mock mode (no API key needed):** If you set `MOCK_LLM_RESPONSES=true` in Step 6, a `mock-debate-model` will appear in the model dropdown. Great for testing the app before buying API credits.
 
 To switch between light and dark mode: open **Council Settings** from the sidebar footer.
 
