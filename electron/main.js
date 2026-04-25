@@ -423,37 +423,134 @@ async function ensureBackendVenv() {
     windowsHide: true,
   });
 
-  updateSplashStatus("Installing Python packages\u2026");
+  updateSplashStatus("Installing Python packages (this may take a few minutes)…");
 
   const pipPython = venvPython;
   const reqFile = path.join(projectRoot, "backend", "requirements.txt");
 
-  await runCommand(
-    pipPython,
-    ["-m", "pip", "install", "--no-cache-dir", "-r", reqFile],
-    { env, windowsHide: true }
-  );
+  const pipArgs = [
+    "-m",
+    "pip",
+    "install",
+    "--no-cache-dir",
+    "--timeout",
+    "60",
+    "--retries",
+    "3",
+    "-r",
+    reqFile,
+  ];
+
+  const maxAttempts = 2;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await runCommand(pipPython, pipArgs, {
+        env,
+        windowsHide: true,
+        onStdout: (line) => {
+          const collecting = line.match(/Collecting (\S+)/);
+          if (collecting) {
+            updateSplashStatus(`Installing ${collecting[1]}…`);
+          }
+          const downloading = line.match(/Downloading .+?(\d+(?:\.\d+)?\s*[kMG]B)/i);
+          if (downloading) {
+            updateSplashStatus(`Downloading… ${downloading[1]}`);
+          }
+          const installing = line.match(/Installing collected packages: (.+)/);
+          if (installing) {
+            updateSplashStatus("Finalizing packages…");
+          }
+        },
+        onStderr: (line) => {
+          const collecting = line.match(/Collecting (\S+)/);
+          if (collecting) {
+            updateSplashStatus(`Installing ${collecting[1]}…`);
+          }
+        },
+        timeoutMs: 600000,
+      });
+      return;
+    } catch (err) {
+      if (attempt < maxAttempts) {
+        console.log(`pip install attempt ${attempt} failed, retrying...`);
+        updateSplashStatus("Retrying package installation…");
+        await new Promise((r) => setTimeout(r, 3000));
+      } else {
+        throw new Error(
+          "Failed to install Python packages.\n\n" +
+            "This usually happens when pip cannot reach the internet.\n\n" +
+            "Try these fixes:\n" +
+            "1. Check your internet connection\n" +
+            "2. If you're behind a VPN or proxy, try disconnecting it\n" +
+            "3. Close the app and try again\n\n" +
+            "Technical details: " +
+            err.message
+        );
+      }
+    }
+  }
 }
 
 function runCommand(cmd, args, opts = {}) {
+  const { onStdout, onStderr, timeoutMs, ...spawnOpts } = opts;
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const settle = (fn, val) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      fn(val);
+    };
+
     const proc = spawn(cmd, args, {
       stdio: ["ignore", "pipe", "pipe"],
-      ...opts,
+      ...spawnOpts,
     });
+
+    let timer = null;
+    if (timeoutMs) {
+      timer = setTimeout(() => {
+        try { proc.kill("SIGTERM"); } catch (_) {}
+        settle(reject, new Error(`${cmd} timed out after ${Math.round(timeoutMs / 1000)}s`));
+      }, timeoutMs);
+    }
+
     let stderr = "";
-    proc.stdout.on("data", (d) => process.stdout.write(`[setup] ${d}`));
+    let stdoutBuf = "";
+    proc.stdout.on("data", (d) => {
+      const text = d.toString();
+      process.stdout.write(`[setup] ${text}`);
+      if (onStdout) {
+        stdoutBuf += text;
+        const lines = stdoutBuf.split("\n");
+        stdoutBuf = lines.pop();
+        for (const line of lines) {
+          if (line.trim()) onStdout(line);
+        }
+      }
+    });
+    let stderrBuf = "";
     proc.stderr.on("data", (d) => {
-      stderr += d;
-      process.stderr.write(`[setup] ${d}`);
+      const text = d.toString();
+      stderr += text;
+      process.stderr.write(`[setup] ${text}`);
+      if (onStderr) {
+        stderrBuf += text;
+        const lines = stderrBuf.split("\n");
+        stderrBuf = lines.pop();
+        for (const line of lines) {
+          if (line.trim()) onStderr(line);
+        }
+      }
     });
     proc.on("error", (err) =>
-      reject(new Error(`Failed to run ${cmd}: ${err.message}`))
+      settle(reject, new Error(`Failed to run ${cmd}: ${err.message}`))
     );
     proc.on("exit", (code) => {
-      if (code === 0) resolve();
+      if (code === 0) settle(resolve);
       else
-        reject(
+        settle(
+          reject,
           new Error(`${cmd} exited with code ${code}\n${stderr.slice(-500)}`)
         );
     });

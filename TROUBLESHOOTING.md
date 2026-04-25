@@ -4,6 +4,8 @@ Solutions for every known issue with AI Debate Council. For installation steps, 
 
 ## Table of Contents
 
+- [First Launch Issues](#first-launch-issues)
+- [macOS Verifying Dialog](#macos-verifying-dialog)
 - [Python Issues](#python-issues)
 - [Virtual Environment Issues](#virtual-environment-issues)
 - [Backend Startup Issues](#backend-startup-issues)
@@ -22,19 +24,122 @@ Solutions for every known issue with AI Debate Council. For installation steps, 
 
 ---
 
+## First Launch Issues
+
+### First Launch Takes a Long Time
+
+The very first time you open the app after installing, it needs to download and install Python packages. This normally takes **1–3 minutes** depending on your internet speed. The splash screen shows which package is currently being installed.
+
+If it takes longer than 5 minutes, your connection may be slow. This is not a bug — the app is downloading packages from the internet. Leave it running and it will finish.
+
+### Pip Install Hangs (App Stuck on "Installing…") {#pip-install-hangs}
+
+If the splash screen stays on "Installing Python packages…" or a specific package name for a very long time:
+
+**Most common cause: slow or blocked internet connection.**
+
+Try these fixes in order:
+
+1. **Wait a bit longer.** Some packages (like `litellm` and its dependencies) are large. On a slow connection this can take 5–10 minutes.
+2. **Disconnect VPN/proxy.** VPNs and corporate proxies often interfere with pip downloads. Disconnect your VPN, close the app, and try again.
+3. **Check your internet.** Open a browser and load any website. If the browser is slow too, the issue is your network, not the app.
+4. **Close and retry.** Close the splash screen (click the red button on macOS or × on Windows) and reopen the app. The app retries the installation automatically.
+5. **Try a different network.** If you're on corporate/school WiFi, try your phone hotspot.
+
+If it still fails after retrying, you can install the packages manually:
+
+**macOS:**
+
+```bash
+cd ~/Library/Application\ Support/ai-debate-council/backend-env
+source .venv/bin/activate
+pip install --no-cache-dir --timeout 60 -r /Applications/AI\ Debate\ Council.app/Contents/Resources/app-content/backend/requirements.txt
+```
+
+**Windows (PowerShell):**
+
+```powershell
+cd "$env:APPDATA\ai-debate-council\backend-env"
+.\.venv\Scripts\Activate.ps1
+pip install --no-cache-dir --timeout 60 -r "$env:LOCALAPPDATA\Programs\ai-debate-council\resources\app-content\backend\requirements.txt"
+```
+
+Then relaunch the app — it will detect the installed packages and skip the install step.
+
+### App Closes Immediately on Launch
+
+This usually means Python is not installed or is too old. The app requires Python 3.10 or newer. Check:
+
+```bash
+python3 --version
+```
+
+If this shows a version below 3.10, or if the command is not found, install Python from [python.org/downloads](https://www.python.org/downloads/).
+
+On macOS, if you installed Python via Homebrew but the app can't find it, try launching the app from Terminal:
+
+```bash
+open /Applications/AI\ Debate\ Council.app
+```
+
+This gives the app access to Homebrew's PATH.
+
+---
+
+## macOS Verifying Dialog {#macos-verifying-dialog}
+
+### "正在验证" / "Verifying…" Spinner That Never Finishes
+
+When you open a `.dmg` file or the app for the first time, macOS runs a security check called Gatekeeper. This shows:
+
+- A spinning progress bar
+- The text "正在验证…" (Chinese) or "Verifying…" (English)
+
+**Normal behavior:** This takes 10–30 seconds and then disappears.
+
+**If it takes longer than 1 minute:**
+
+1. **Cancel it** (press `⌘ + .` or click Cancel if available)
+2. Right-click the `.dmg` or app → **Open**
+3. If a security dialog appears, click **Open**
+
+**If it keeps happening every time:**
+
+```bash
+xattr -cr /Applications/AI\ Debate\ Council.app
+```
+
+This removes the quarantine flag that triggers the verification. You only need to run this once.
+
+### "AI Debate Council is Damaged and Can't Be Opened"
+
+This does NOT mean the file is actually damaged. macOS shows this when Gatekeeper blocks an unsigned app. Fix:
+
+```bash
+xattr -cr /Applications/AI\ Debate\ Council.app
+```
+
+Then double-click the app normally.
+
+### "Cannot Verify That This App Is Free From Malware"
+
+This is normal for open-source apps that are not code-signed. See [SETUP.md](SETUP.md) Step 4 for how to open it using right-click → Open.
+
+---
+
 ## Python Issues
 
-### Python 3.13 Not Found
+### Python 3.10+ Not Found
 
 Check your Python version:
 
 ```bash
 python --version
 python3 --version
-python3.13 --version
+python3 --version
 ```
 
-The backend requires Python 3.13. If `python3.13` is not found:
+The backend requires Python 3.10+. If `python3` is not found:
 
 **macOS with Homebrew:**
 
@@ -55,14 +160,14 @@ Follow the PATH instructions shown by Homebrew, then open a new terminal.
 Download from [python.org/downloads](https://www.python.org/downloads/). Make sure to check "Add Python to PATH" during installation.
 
 ```powershell
-py -3.13 --version
+py -3 --version
 ```
 
 **Linux (Ubuntu/Debian):**
 
 ```bash
 sudo apt update
-sudo apt install python3.13 python3.13-venv
+sudo apt install python3 python3-venv
 ```
 
 ### Wrong Python Version in Virtual Environment
@@ -71,7 +176,7 @@ If you created the virtual environment with the wrong Python version:
 
 ```bash
 rm -rf .venv
-python3.13 -m venv .venv
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -r backend/requirements.txt
 ```
@@ -80,7 +185,7 @@ On Windows:
 
 ```powershell
 Remove-Item .venv -Recurse -Force
-py -3.13 -m venv .venv
+py -3 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r backend/requirements.txt
 ```
@@ -741,10 +846,10 @@ SQLite keeps the database in memory while connections are open. For very large d
 
 ### `python` Command Not Found
 
-On Windows, use `py -3.13` instead of `python3.13`:
+On Windows, use `py -3` instead of `python3`:
 
 ```powershell
-py -3.13 -m venv .venv
+py -3 -m venv .venv
 ```
 
 ### Path Too Long Errors
@@ -777,7 +882,7 @@ Some antivirus software blocks Python or Node.js processes. If the backend or fr
 
 ## macOS-Specific Issues
 
-### `python3.13` Not Found After Homebrew Install
+### `python3` Not Found After Homebrew Install
 
 ```bash
 brew info python@3.13
@@ -809,33 +914,43 @@ When starting the backend, macOS may ask to allow incoming network connections. 
 
 ## Desktop App (Electron) Issues
 
-### App Shows "Python Environment Not Found"
+### App Shows "Python Environment Not Found" or "Python 3.10 or later is required"
 
-The Electron app looks for `.venv` inside the bundled app content. You need to create the virtual environment inside the app resources:
+The app auto-provisions the Python environment on first launch. If you see this error, it means the app could not find Python 3.10+ on your system.
+
+**Fix:** Install Python 3.10 or newer from [python.org/downloads](https://www.python.org/downloads/), then relaunch the app.
+
+On macOS, if you installed Python via Homebrew but the app can't find it, try launching from Terminal:
+
+```bash
+open /Applications/AI\ Debate\ Council.app
+```
+
+If you want to set up the environment manually instead of letting the app do it:
 
 **macOS:**
 
 ```bash
-cd /Applications/AI\ Debate\ Council.app/Contents/Resources/app-content
-python3.13 -m venv .venv
+cd ~/Library/Application\ Support/ai-debate-council/backend-env
+python3 -m venv .venv
 source .venv/bin/activate
-pip install -r backend/requirements.txt
+pip install --no-cache-dir -r /Applications/AI\ Debate\ Council.app/Contents/Resources/app-content/backend/requirements.txt
 ```
 
 **Windows:**
 
 ```powershell
-cd "$env:LOCALAPPDATA\Programs\ai-debate-council\resources\app-content"
-py -3.13 -m venv .venv
+cd "$env:APPDATA\ai-debate-council\backend-env"
+py -3 -m venv .venv
 .\.venv\Scripts\Activate.ps1
-pip install -r backend/requirements.txt
+pip install --no-cache-dir -r "$env:LOCALAPPDATA\Programs\ai-debate-council\resources\app-content\backend\requirements.txt"
 ```
 
 ### App Shows "Startup Error: Server Did Not Start"
 
 This means the backend or frontend failed to start within the timeout period. The servers run as invisible background processes, so there is no terminal window to check. Instead:
 
-1. Python 3.13 is installed and the `.venv` exists inside the app content directory.
+1. Python 3.10+ is installed and the `.venv` exists inside the app content directory.
 2. Node.js 20+ is installed and `frontend/node_modules` exists.
 3. No other process is using port 8000 or 6001.
 4. The `.env` file exists (copy from `.env.example`) with at least one API key or `MOCK_LLM_RESPONSES=true`.

@@ -1,271 +1,230 @@
-# Setup (Desktop App)
+# Setup — AI Debate Council (Desktop App)
 
-Step-by-step installation guide for AI Debate Council as a native desktop application. For environment variable details, see [ENVREADME.md](ENVREADME.md). For troubleshooting, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
+A complete beginner-friendly guide. Follow every step in order. If anything goes wrong, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
-> **Looking for the web version?** Switch to the `master-website-interface` branch for the browser-based application that you run from the terminal.
+> **Looking for the web version?** Switch to the `master-website-interface` branch.
 
-## Requirements
+---
 
-- **Python 3.13** (required — the backend uses Python 3.13 features)
-- **Node.js 20** or newer
-- **npm 10** or newer
-- **At least one provider API key** for real debates (or `MOCK_LLM_RESPONSES=true` for testing)
+## What You Need Before Starting
 
-The desktop app bundles the backend and frontend source code but not the Python or Node.js runtimes. You need both installed on your system.
+| Requirement | Why |
+| --- | --- |
+| **Python 3.10 or newer** | The backend runs on Python |
+| **An internet connection** | The app downloads Python packages on first launch |
+| **At least one AI provider API key** | To use real AI models (or use mock mode for testing) |
 
-## macOS
+**You do NOT need Node.js.** The desktop app bundles the frontend — no npm commands required.
 
-### Step 1: Install Python 3.13
+---
 
-With Homebrew:
+## macOS Setup
+
+### Step 1: Install Python
+
+If you already have Python 3.10+, skip to Step 2.
+
+**Option A — Using Homebrew (recommended if you have Homebrew):**
+
+Open **Terminal** (press `⌘ + Space`, type "Terminal", press Enter) and run:
 
 ```bash
 brew install python@3.13
 ```
 
-Or download from [python.org/downloads](https://www.python.org/downloads/).
+**Option B — Download from python.org:**
 
-Verify:
+1. Go to [python.org/downloads](https://www.python.org/downloads/)
+2. Click the big yellow "Download Python 3.x.x" button
+3. Open the downloaded `.pkg` file
+4. Follow the installer — click **Continue** → **Continue** → **Agree** → **Install**
+5. Enter your Mac password when asked
 
-```bash
-python3.13 --version
-```
-
-### Step 2: Install Node.js
-
-Download from [nodejs.org](https://nodejs.org/). The LTS version (20+) is recommended.
+**Verify Python is installed** — in Terminal, run:
 
 ```bash
-node --version
-npm --version
+python3 --version
 ```
 
-### Step 3: Download and Install the App
+You should see something like `Python 3.13.x`. Any version 3.10 or higher works.
 
-Download the `.dmg` installer for your Mac from [Releases](https://github.com/Evan1108-Coder/AI-Debate-Council/releases):
+> **⚠️ "正在验证" (Verifying) dialog?** macOS sometimes shows a "Verifying..." spinner when you open a downloaded file. This is normal — just wait 10-30 seconds. If it takes longer than a minute, right-click the file → Open. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md#macos-verifying-dialog) for more help.
 
-- **Apple Silicon** (M1/M2/M3/M4): `AI Debate Council-1.0.0-arm64.dmg`
-- **Intel Macs**: `AI Debate Council-1.0.0.dmg`
+### Step 2: Download the App
 
-Open the `.dmg` and drag **AI Debate Council** to the **Applications** folder.
+Go to the [Releases page](https://github.com/Evan1108-Coder/AI-Debate-Council/releases) and download the correct `.dmg` file:
 
-### Step 4: First-Time Setup
+- **Apple Silicon** (M1 / M2 / M3 / M4 Mac): `AI Debate Council-1.0.0-arm64.dmg`
+- **Intel Mac**: `AI Debate Council-1.0.0.dmg`
 
-Before the first launch, open Terminal and set up the Python environment and frontend dependencies inside the app bundle:
+> **Not sure which Mac you have?** Click the Apple menu () → **About This Mac**. If it says "Apple M1" (or M2, M3, M4), download the **arm64** version. If it says "Intel", download the other one.
 
-```bash
-cd /Applications/AI\ Debate\ Council.app/Contents/Resources/app-content
-python3.13 -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-pip install -r backend/requirements.txt
-cd frontend && npm install && cd ..
-```
+### Step 3: Install the App
 
-### Step 5: Create the Environment File
+1. Double-click the downloaded `.dmg` file
+2. A window appears showing the app icon and an Applications folder
+3. **Drag** the AI Debate Council icon **into** the Applications folder
+4. Wait for the copy to finish
+5. Close the `.dmg` window
+6. (Optional) Eject the disk image: right-click "AI Debate Council" on your desktop → Eject
 
-```bash
-cp .env.example .env
-```
+### Step 4: Open the App for the First Time
 
-### Step 6: Add API Keys
+1. Open **Finder** → **Applications**
+2. **Right-click** (or Ctrl+click) on **AI Debate Council**
+3. Click **Open** from the menu
+4. A dialog says "macOS cannot verify that this app is free from malware" — click **Open**
 
-Open `.env` in any text editor and add at least one provider API key:
+> **Why right-click?** Because the app is not signed with an Apple certificate (this is normal for open-source apps). Double-clicking shows a different dialog that doesn't have the "Open" button. You only need to right-click the very first time.
 
-```text
-OPENAI_API_KEY=sk-your-key-here
-ANTHROPIC_API_KEY=sk-ant-your-key-here
-```
+> **⚠️ If you see "damaged" or "正在验证" and it never finishes**, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md#macos-verifying-dialog).
 
-One provider key unlocks all models from that provider. For example, one `OPENAI_API_KEY` unlocks `gpt-5.4-pro`, `gpt-5.4-mini`, `gpt-4o`, and `gpt-4o-mini`.
+### Step 5: Wait for First-Time Setup
 
-**Do not put model names in `.env`.** The app detects models automatically from your API keys.
+On the **very first launch**, the app will:
 
-See [ENVREADME.md](ENVREADME.md) for the full list of 21 models across 6 providers.
+1. Show a splash screen saying "Setting up Python environment…"
+2. Create a Python environment (this takes about 10 seconds)
+3. Show "Installing [package name]…" for each Python package
+4. Start the backend and frontend servers
 
-### Step 7: Launch the App
+**This first launch takes 1–3 minutes** depending on your internet speed. Subsequent launches take only a few seconds.
 
-Open **AI Debate Council** from Applications.
+> **⚠️ It looks stuck?** The splash screen should show changing status messages (package names updating). If the same message stays for more than 5 minutes, your internet connection might be slow or blocked. Close the app and try again. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md#pip-install-hangs) for more help.
 
-If macOS shows "Cannot verify that this app is free from malware":
+### Step 6: Set Up Your API Keys
 
-**Method 1 (Right-click):**
+Once the app opens, you need to add at least one AI provider API key:
 
-1. Right-click (or Ctrl+click) the app in Applications.
-2. Select "Open" from the context menu.
-3. Click "Open" in the dialog.
+1. Open Terminal and run:
 
-**Method 2 (System Settings):**
+   ```bash
+   cd /Applications/AI\ Debate\ Council.app/Contents/Resources/app-content
+   cp .env.example .env
+   open -e .env
+   ```
 
-1. Open **System Settings** → **Privacy & Security**.
-2. Scroll down to the Security section. You will see a message saying "AI Debate Council" was blocked.
-3. Click **Open Anyway**.
-4. Enter your password when prompted.
+2. This opens the `.env` file in TextEdit. Add your API key(s):
 
-You only need to do this once. macOS remembers your choice.
+   ```text
+   OPENAI_API_KEY=sk-your-key-here
+   ANTHROPIC_API_KEY=sk-ant-your-key-here
+   ```
 
-### Step 8: Using the App
+3. Save the file (`⌘ + S`) and close TextEdit
+4. **Quit and relaunch** the app for the keys to take effect
 
-The app starts the backend (port 8000) and frontend (port 6001) as invisible background processes — no terminal window or console box appears. You do not need a terminal open to launch the app; just open it from Applications (macOS) or the Start Menu (Windows). A frameless splash screen with a close button is shown while the servers start. Closing the splash screen during startup cleanly quits the app and all background processes. Once the servers are ready, the main window opens automatically.
+> **Don't have API keys yet?** Set `MOCK_LLM_RESPONSES=true` in the `.env` file to test the app with fake AI responses. No API key needed.
 
-Click the **+** button in the sidebar to create your first session. The setup modal lets you choose:
+One API key unlocks all models from that provider. See [ENVREADME.md](ENVREADME.md) for the full list of 21 models across 6 providers.
 
-- **AI vs AI Debate**: the Pro and Con council debate each other.
-- **AI vs Human Debate Training**: you debate a Practice Debater and receive Judge, Judge Assistant, and Debate Trainer feedback.
+### Step 7: Start Using the App
 
-After the chat is created, select an Overall Model from the dropdown and type either a normal message or a debate topic.
+1. Click the **+** button in the sidebar to create a new session
+2. Choose **AI vs AI Debate** or **AI vs Human Debate Training**
+3. Select a model from the **Overall Model** dropdown
+4. Type a debate topic and press Enter!
 
-To switch between light and dark mode, open **Council Settings** from the sidebar footer and change the **Theme** to Light, Dark, or System (follows your OS preference).
+To switch between light and dark mode: open **Council Settings** from the sidebar footer.
 
-## Windows
+---
 
-### Step 1: Install Python 3.13
+## Windows Setup
 
-Download from [python.org/downloads](https://www.python.org/downloads/).
+### Step 1: Install Python
 
-During installation, **check the box to add Python to PATH**.
+1. Go to [python.org/downloads](https://www.python.org/downloads/)
+2. Click the big yellow "Download Python 3.x.x" button
+3. Run the downloaded `.exe` file
+4. **⚠️ IMPORTANT: Check the box that says "Add Python to PATH"** at the bottom of the installer
+5. Click **Install Now**
+6. Click **Close** when finished
 
-Verify:
+**Verify** — open PowerShell (press `Win + X` → "Windows PowerShell") and run:
 
 ```powershell
-py -3.13 --version
+python --version
 ```
 
-### Step 2: Install Node.js
+You should see `Python 3.x.x` (3.10 or higher).
 
-Download from [nodejs.org](https://nodejs.org/). The LTS version (20+) is recommended.
+### Step 2: Download and Install the App
 
-Verify:
+1. Go to the [Releases page](https://github.com/Evan1108-Coder/AI-Debate-Council/releases)
+2. Download `AI Debate Council Setup 1.0.0.exe`
+3. Run the installer and follow the prompts
+4. The app installs and may launch automatically
 
-```powershell
-node --version
-npm --version
-```
+### Step 3: First Launch
 
-### Step 3: Download and Install the App
+Same as macOS — the first launch takes 1–3 minutes to set up the Python environment. The splash screen shows progress as packages are installed.
 
-Download `AI Debate Council Setup 1.0.0.exe` from [Releases](https://github.com/Evan1108-Coder/AI-Debate-Council/releases).
+### Step 4: Set Up Your API Keys
 
-Run the installer and follow the prompts. Choose an installation directory or accept the default.
+1. Open PowerShell and run:
 
-### Step 4: First-Time Setup
+   ```powershell
+   cd "$env:LOCALAPPDATA\Programs\ai-debate-council\resources\app-content"
+   Copy-Item .env.example .env
+   notepad .env
+   ```
 
-Before the first launch, open PowerShell and set up the Python environment and frontend dependencies:
+2. Add your API key(s), save, and close Notepad
+3. Quit and relaunch the app
 
-```powershell
-cd "$env:LOCALAPPDATA\Programs\ai-debate-council\resources\app-content"
-py -3.13 -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install --upgrade pip
-pip install -r backend/requirements.txt
-cd frontend; npm install; cd ..
-```
+---
 
-If PowerShell blocks activation with a security error:
+## Testing Without API Keys (Mock Mode)
 
-```powershell
-Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
-.\.venv\Scripts\Activate.ps1
-```
+To try the app without spending money on API calls:
 
-### Step 5: Create the Environment File
+1. Open the `.env` file (see Step 6 above)
+2. Add this line:
 
-```powershell
-Copy-Item .env.example .env
-```
+   ```text
+   MOCK_LLM_RESPONSES=true
+   ```
 
-### Step 6: Add API Keys
+3. Save and relaunch the app
+4. A `mock-debate-model` will appear in the model dropdown
 
-Open `.env` in any text editor (Notepad, VS Code, etc.) and add at least one provider API key. Do not add model names. See [ENVREADME.md](ENVREADME.md) for details.
+Mock mode streams fake responses that exercise the full UI — debate turns, judge verdict, analytics, and all.
 
-### Step 7: Launch the App
+---
 
-Open **AI Debate Council** from the Start Menu or Desktop shortcut.
+## Building From Source
 
-## Building from Source
-
-If you prefer to build the desktop app yourself instead of downloading a pre-built installer:
+If you want to build the desktop app yourself instead of using the pre-built installer:
 
 ```bash
 git clone -b master-app-interface https://github.com/Evan1108-Coder/AI-Debate-Council.git
 cd AI-Debate-Council
 
 # Set up backend
-python3.13 -m venv .venv
-source .venv/bin/activate
+python3 -m venv .venv
+source .venv/bin/activate   # Windows: .\.venv\Scripts\Activate.ps1
 pip install -r backend/requirements.txt
 
-# Set up frontend
+# Set up and build frontend
 cd frontend && npm install && npx next build && cd ..
 
-# Install Electron dependencies and build
+# Build the desktop app
 cd electron && npm install
-npm run build:mac    # macOS .dmg (arm64 + x64)
+npm run build:mac    # macOS .dmg
 npm run build:win    # Windows .exe
 npm run build:all    # Both platforms
 ```
 
-Built installers appear in the `dist/` directory.
+Built installers appear in the `electron/dist/` directory.
 
-### Running in Development Mode
-
-Instead of building an installer, you can run the app directly:
-
-```bash
-cd electron
-npm start
-```
-
-This starts Electron, which launches the backend and frontend as background processes, shows a splash screen, and opens the app window once the servers are ready.
-
-## Mock Mode
-
-To test the full UI without real API calls or provider keys:
-
-1. Set in `.env`:
-
-   ```text
-   MOCK_LLM_RESPONSES=true
-   ```
-
-2. Relaunch the app.
-
-3. A `mock-debate-model` will appear in the dropdown. Select it and start a debate. The backend streams fake responses that exercise the full UI flow — debate turns, judge verdict, analytics, and all.
-
-## Running Tests
-
-The backend includes unit tests that work without API keys:
-
-```bash
-# From the app content directory (or project root if building from source)
-python3.13 -m unittest discover -s backend/tests -v
-```
+---
 
 ## Updating
 
-To update the desktop app, download the latest installer from [Releases](https://github.com/Evan1108-Coder/AI-Debate-Council/releases) and install it over the existing version. Your `.env` file and database will be preserved.
-
-If building from source:
-
-```bash
-cd AI-Debate-Council
-git pull
-source .venv/bin/activate
-pip install -r backend/requirements.txt
-cd frontend && npm install && npx next build && cd ..
-cd electron && npm install && npm run build:mac
-```
+Download the latest installer from [Releases](https://github.com/Evan1108-Coder/AI-Debate-Council/releases) and install over the existing version. Your `.env` file and database are preserved.
 
 ## Uninstalling
 
-### macOS
+**macOS:** Drag AI Debate Council from Applications to Trash.
 
-1. Quit the app.
-2. Drag **AI Debate Council** from Applications to the Trash.
-
-### Windows
-
-1. Quit the app.
-2. Open Settings → Apps → AI Debate Council → Uninstall.
-
-The SQLite database lives inside the app content directory. Uninstalling removes all data.
+**Windows:** Settings → Apps → AI Debate Council → Uninstall.
