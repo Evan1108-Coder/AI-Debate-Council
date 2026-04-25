@@ -204,7 +204,7 @@ export function DebateRoom({
   if (showCouncilSettings) {
     return (
       <main className="flex h-full min-w-0 flex-1 flex-col bg-[#f5f7f6]">
-        <section className="border-b border-zinc-300 bg-white p-4">
+        <section className="electron-drag border-b border-zinc-300 bg-white p-4">
           <p className="text-sm font-medium text-emerald-700">Council system</p>
           <h2 className="text-2xl font-semibold text-zinc-950">Council Settings</h2>
           <p className="mt-1 text-sm text-zinc-600">Universal behavior, long-term experience, identity memory, and reset controls.</p>
@@ -231,7 +231,7 @@ export function DebateRoom({
 
   return (
     <main className="flex h-full min-w-0 flex-1 flex-col bg-[#f5f7f6]">
-      <section className="border-b border-zinc-300 bg-white p-4">
+      <section className="electron-drag border-b border-zinc-300 bg-white p-4">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">

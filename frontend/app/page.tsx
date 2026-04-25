@@ -283,17 +283,17 @@ export default function Home() {
         const [sessionList, modelData, councilData, experienceData, profileData] = await Promise.all([
           listSessions(),
           refreshModels(),
-          getCouncilSettings(),
-          refreshAgentExperienceOverview(),
-          refreshUserProfileOverview()
+          getCouncilSettings().catch(() => null),
+          refreshAgentExperienceOverview().catch(() => null),
+          refreshUserProfileOverview().catch(() => null)
         ]);
         if (cancelled) {
           return;
         }
         setModels(modelData);
-        setCouncilSettings(councilData);
-        setAgentExperienceOverview(experienceData);
-        setUserProfileOverview(profileData);
+        if (councilData) setCouncilSettings(councilData);
+        if (experienceData) setAgentExperienceOverview(experienceData);
+        if (profileData) setUserProfileOverview(profileData);
 
         setSessions(sessionList);
         setSelectedId(sessionList[0]?.id ?? null);

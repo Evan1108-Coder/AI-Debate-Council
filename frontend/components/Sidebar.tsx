@@ -39,7 +39,7 @@ export function Sidebar({
 
   return (
     <aside className="flex h-full w-full flex-col border-r border-zinc-300 bg-white md:w-80">
-      <div className="border-b border-zinc-300 p-4">
+      <div className="electron-drag border-b border-zinc-300 p-4">
         <div className="mb-3 rounded-md border border-zinc-300 bg-zinc-50 p-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-zinc-500">
             Debate Coach

@@ -46,7 +46,7 @@ function WelcomePage({
   const available = models?.available_model_count ?? 0;
   return (
     <main className="flex h-full min-w-0 flex-1 flex-col bg-[#f5f7f6]">
-      <section className="border-b border-zinc-300 bg-white p-6">
+      <section className="electron-drag border-b border-zinc-300 bg-white p-6">
         <p className="text-sm font-medium text-emerald-700">AI Debate Coach & Council</p>
         <h1 className="mt-1 text-3xl font-semibold text-zinc-950">
           Train your arguments or watch a full council debate.
@@ -205,7 +205,7 @@ function AiDebaterExperiencesPage({
 
   return (
     <main className="flex h-full min-w-0 flex-1 flex-col bg-[#f5f7f6]">
-      <section className="border-b border-zinc-300 bg-white p-6">
+      <section className="electron-drag border-b border-zinc-300 bg-white p-6">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <p className="text-sm font-medium text-emerald-700">Global memory layer</p>
@@ -401,7 +401,7 @@ function UserDebateProfilePage({
 
   return (
     <main className="flex h-full min-w-0 flex-1 flex-col bg-[#f5f7f6]">
-      <section className="border-b border-zinc-300 bg-white p-6">
+      <section className="electron-drag border-b border-zinc-300 bg-white p-6">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
             <p className="text-sm font-medium text-emerald-700">Global coaching layer</p>

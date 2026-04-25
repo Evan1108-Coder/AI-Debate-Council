@@ -30,9 +30,31 @@ body {
   font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
 }
 
+/* ─── Electron window drag region ─── */
+
+.electron-drag {
+  -webkit-app-region: drag;
+}
+
+.electron-drag button,
+.electron-drag a,
+.electron-drag input,
+.electron-drag select,
+.electron-drag textarea,
+.electron-drag [role="button"] {
+  -webkit-app-region: no-drag;
+}
+
+/* ─── Electron window visual edge ─── */
+
+body {
+  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.15);
+}
+
 html.dark body {
   background: #111318;
   color: #e4e5e7;
+  box-shadow: inset 0 0 0 0.5px rgba(255, 255, 255, 0.1);
 }
 
 button,
