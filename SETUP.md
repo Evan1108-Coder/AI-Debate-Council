@@ -148,9 +148,9 @@ When the app finishes loading, you'll see a welcome screen like this:
 │                                                             │
 │  "Create a session to begin."                               │
 │                                                             │
-│  ┌─────────────────┐  ┌──────────────────┐  First 60 secs  │
-│  │ AI vs Human     │  │ AI vs AI Debate  │  Verified: 0    │
-│  │ Debate Training │  │                  │  Providers: 0   │
+│  ┌─────────────────┐  ┌──────────────────┐  First 60 secs   │
+│  │ AI vs Human     │  │ AI vs AI Debate  │  Verified: 0     │
+│  │ Debate Training │  │                  │  Providers: 0    │
 │  │ [RECOMMENDED]   │  │ [COUNCIL LAB]    │                  │
 │  │                 │  │                  │  1. Create chat  │
 │  │ Start Training  │  │ Start Council    │  2. Pick model   │
@@ -158,7 +158,7 @@ When the app finishes loading, you'll see a welcome screen like this:
 │  └─────────────────┘  └──────────────────┘                  │
 │                                                             │
 │  Provider readiness: OpenAI [Locked], Anthropic [Locked]... │
-│  Council Settings ⚙                                        │
+│  Council Settings ⚙                                         │
 └─────────────────────────────────────────────────────────────┘
 ```
 
