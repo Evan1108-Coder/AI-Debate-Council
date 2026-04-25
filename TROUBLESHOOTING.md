@@ -173,6 +173,34 @@ macOS shows this dialog when an app takes too long to display its first window. 
 
 This dialog typically only appears on the very first launch. Subsequent launches are much faster.
 
+### "xattr: Operation not permitted" (Even With sudo)
+
+If you run `sudo xattr -cr /Applications/AI\ Debate\ Council.app` and still get "Operation not permitted", macOS is blocking Terminal from modifying app attributes. This is a macOS security feature called **System Integrity Protection (SIP)**.
+
+**Fix — Grant Terminal Full Disk Access:**
+
+1. Open **System Settings** → **Privacy & Security** → **Full Disk Access**
+2. Click the **+** button (you may need to unlock with your password first)
+3. Navigate to **Applications** → **Utilities** → select **Terminal** → click **Open**
+4. Terminal now appears in the list with a toggle — make sure it's **ON**
+5. **Quit Terminal completely** (`⌘ + Q`) and reopen it
+6. Run the command again:
+
+```bash
+sudo xattr -cr /Applications/AI\ Debate\ Council.app
+```
+
+It should now succeed with no errors. After this, double-click the app normally.
+
+**Alternative if you don't want to grant Full Disk Access:**
+
+Use the System Settings method instead — no Terminal needed:
+
+1. Open **System Settings** → **Privacy & Security**
+2. Scroll down to the Security section
+3. You'll see "AI Debate Council was blocked" — click **Open Anyway**
+4. Enter your password and click **Open**
+
 ### Quick Fix for All Gatekeeper Issues
 
 If any of the above dialogs keep appearing, this single Terminal command fixes them all:
@@ -180,6 +208,8 @@ If any of the above dialogs keep appearing, this single Terminal command fixes t
 ```bash
 sudo xattr -cr /Applications/AI\ Debate\ Council.app
 ```
+
+> **Getting "Operation not permitted"?** See [xattr: Operation not permitted](#xattr-operation-not-permitted-even-with-sudo) above — you need to grant Terminal Full Disk Access first.
 
 This removes the macOS quarantine attribute from the app. It is safe and you only need to run it once. After this, double-clicking the app works normally with no security prompts.
 

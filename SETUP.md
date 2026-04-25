@@ -91,7 +91,9 @@ Go to the [Releases page](https://github.com/Evan1108-Coder/AI-Debate-Council/re
 > ```bash
 > sudo xattr -cr /Applications/AI\ Debate\ Council.app
 > ```
-> Then double-click the app normally. This removes the quarantine flag permanently.
+> Enter your Mac password when asked, then double-click the app normally.
+>
+> **Getting "Operation not permitted"?** You need to grant Terminal Full Disk Access first: **System Settings** → **Privacy & Security** → **Full Disk Access** → click **+** → add **Terminal** (in Applications/Utilities) → quit and reopen Terminal → run the command again. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md#xattr-operation-not-permitted-even-with-sudo) for details.
 
 > **Why right-click?** Double-clicking an unsigned app shows a "move to Trash" dialog with no Open button. Right-clicking gives you the Open option. You only need to do this once — after the first open, double-click works fine.
 
