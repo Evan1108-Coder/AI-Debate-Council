@@ -70,14 +70,32 @@ Go to the [Releases page](https://github.com/Evan1108-Coder/AI-Debate-Council/re
 
 ### Step 4: Open the App for the First Time
 
+> **⚠️ This step is important.** Because the app is not signed with an Apple Developer certificate (normal for open-source apps), macOS will try to block it. Follow these steps exactly.
+
 1. Open **Finder** → **Applications**
 2. **Right-click** (or Ctrl+click) on **AI Debate Council**
-3. Click **Open** from the menu
-4. A dialog says "macOS cannot verify that this app is free from malware" — click **Open**
+3. Click **Open** from the right-click menu
+4. macOS shows a dialog saying "macOS cannot verify that this app is free from malware"
+5. Click **Open** in that dialog
 
-> **Why right-click?** Because the app is not signed with an Apple certificate (this is normal for open-source apps). Double-clicking shows a different dialog that doesn't have the "Open" button. You only need to right-click the very first time.
+**What happens next:** The app icon will bounce in the Dock for 10–30 seconds while macOS runs a security check (called Gatekeeper). During this time you may see a "正在验证…" (Verifying…) spinner and **no app window will appear yet**. This is completely normal — just wait.
 
-> **⚠️ If you see "damaged" or "正在验证" and it never finishes**, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md#macos-verifying-dialog).
+> **If the icon bounces for more than 1 minute and nothing opens**, macOS Gatekeeper is stuck. Do this:
+>
+> 1. Click the bouncing icon in the Dock to bring any hidden dialog to the front
+> 2. If no dialog appears, open **System Settings** → **Privacy & Security**
+> 3. Scroll down — you will see "AI Debate Council was blocked from use because it is not from an identified developer"
+> 4. Click **Open Anyway** → enter your password → click **Open**
+>
+> If that still doesn't work, open **Terminal** and run:
+> ```bash
+> xattr -cr /Applications/AI\ Debate\ Council.app
+> ```
+> Then double-click the app normally. This removes the quarantine flag permanently.
+
+> **Why right-click?** Double-clicking an unsigned app shows a "move to Trash" dialog with no Open button. Right-clicking gives you the Open option. You only need to do this once — after the first open, double-click works fine.
+
+See [TROUBLESHOOTING.md](TROUBLESHOOTING.md#macos-gatekeeper-blocks-the-app) for more Gatekeeper scenarios.
 
 ### Step 5: Wait for First-Time Setup
 

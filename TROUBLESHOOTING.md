@@ -5,7 +5,7 @@ Solutions for every known issue with AI Debate Council. For installation steps, 
 ## Table of Contents
 
 - [First Launch Issues](#first-launch-issues)
-- [macOS Verifying Dialog](#macos-verifying-dialog)
+- [macOS Gatekeeper Blocks the App](#macos-gatekeeper-blocks-the-app)
 - [Python Issues](#python-issues)
 - [Virtual Environment Issues](#virtual-environment-issues)
 - [Backend Startup Issues](#backend-startup-issues)
@@ -86,14 +86,31 @@ This gives the app access to Homebrew's PATH.
 
 ---
 
-## macOS Verifying Dialog {#macos-verifying-dialog}
+## macOS Gatekeeper Blocks the App {#macos-gatekeeper-blocks-the-app}
 
-### "正在验证" / "Verifying…" Spinner That Never Finishes
+macOS has a security feature called **Gatekeeper** that blocks apps not signed with an Apple Developer certificate. Since this is an open-source app, it is not code-signed, so macOS will try to block it the first time you open it. This section covers every Gatekeeper scenario.
 
-When you open a `.dmg` file or the app for the first time, macOS runs a security check called Gatekeeper. This shows:
+### App Icon Bounces in Dock but Nothing Opens
 
-- A spinning progress bar
-- The text "正在验证…" (Chinese) or "Verifying…" (English)
+This is the most common first-launch issue. You double-click or right-click → Open the app, the icon bounces in the Dock, but no window appears. Behind the scenes, macOS is running a Gatekeeper verification check.
+
+**What to do:**
+
+1. **Wait 10–30 seconds.** The verification usually finishes on its own and the app window will appear.
+2. **Click the bouncing app icon in the Dock.** Sometimes the security dialog opens behind other windows — clicking the icon brings it to the front.
+3. **If nothing happens after 1 minute**, open **System Settings** → **Privacy & Security**. Scroll down to the Security section. You will see a message saying "AI Debate Council was blocked." Click **Open Anyway**, enter your password, then click **Open**.
+
+If this still does not work, run this command in Terminal to permanently remove the quarantine flag:
+
+```bash
+xattr -cr /Applications/AI\ Debate\ Council.app
+```
+
+Then double-click the app normally. You only need to do this once.
+
+### "正在验证" / "Verifying…" Spinner {#macos-verifying-dialog}
+
+When you open the `.dmg` installer or the app for the first time, macOS shows a spinning progress bar with the text "正在验证…" (Chinese) or "Verifying…" (English).
 
 **Normal behavior:** This takes 10–30 seconds and then disappears.
 
@@ -103,7 +120,7 @@ When you open a `.dmg` file or the app for the first time, macOS runs a security
 2. Right-click the `.dmg` or app → **Open**
 3. If a security dialog appears, click **Open**
 
-**If it keeps happening every time:**
+**If it keeps happening every time you open the app:**
 
 ```bash
 xattr -cr /Applications/AI\ Debate\ Council.app
@@ -121,9 +138,50 @@ xattr -cr /Applications/AI\ Debate\ Council.app
 
 Then double-click the app normally.
 
-### "Cannot Verify That This App Is Free From Malware"
+### "macOS Cannot Verify That This App Is Free From Malware"
 
-This is normal for open-source apps that are not code-signed. See [SETUP.md](SETUP.md) Step 4 for how to open it using right-click → Open.
+This is normal for open-source apps. Two ways to open:
+
+**Method 1 — Right-click (recommended for first time):**
+
+1. Right-click (or Ctrl+click) the app in Finder → Applications
+2. Click **Open** from the context menu
+3. Click **Open** in the dialog that appears
+
+**Method 2 — System Settings:**
+
+1. Open **System Settings** → **Privacy & Security**
+2. Scroll down — you will see "AI Debate Council was blocked from use"
+3. Click **Open Anyway** → enter your password → click **Open**
+
+You only need to do this once. macOS remembers your choice after the first approval.
+
+### "你不能打开应用程序，因为它没有响应" / "Can't Open Because It Is Not Responding"
+
+macOS shows this dialog when an app takes too long to display its first window. For AI Debate Council, this can happen because:
+
+1. **Gatekeeper verification is still running in the background.** The app is waiting for macOS to finish the security check before it can show the splash screen.
+2. **The app is setting up the Python environment.** On first launch, the app creates a Python virtual environment and installs packages — this happens before any window appears.
+
+**What to do:**
+
+1. **Click OK** to dismiss the dialog — do NOT force-quit the app yet.
+2. **Wait 30–60 seconds.** The splash screen should appear once Gatekeeper finishes and the app starts loading.
+3. **If nothing happens after 1 minute**, force-quit the app (right-click the Dock icon → Force Quit), then:
+   - Remove the quarantine flag: `xattr -cr /Applications/AI\ Debate\ Council.app`
+   - Open the app again by right-clicking → Open in Finder
+
+This dialog typically only appears on the very first launch. Subsequent launches are much faster.
+
+### Quick Fix for All Gatekeeper Issues
+
+If any of the above dialogs keep appearing, this single Terminal command fixes them all:
+
+```bash
+xattr -cr /Applications/AI\ Debate\ Council.app
+```
+
+This removes the macOS quarantine attribute from the app. It is safe and you only need to run it once. After this, double-clicking the app works normally with no security prompts.
 
 ---
 
@@ -999,22 +1057,7 @@ If the Electron window opens but shows nothing:
 
 ### "macOS Cannot Verify That This App Is Free From Malware"
 
-The app is not code-signed with an Apple Developer certificate. This is normal for indie and open-source apps. Use one of the two methods below to open it:
-
-**Method 1 (Right-click):**
-
-1. Right-click (or Ctrl+click) the app in Applications.
-2. Select "Open" from the context menu.
-3. Click "Open" in the dialog that appears.
-
-**Method 2 (System Settings):**
-
-1. Open **System Settings** → **Privacy & Security**.
-2. Scroll down to the Security section. You will see a message saying "AI Debate Council" was blocked.
-3. Click **Open Anyway**.
-4. Enter your password when prompted.
-
-You only need to do this once. macOS remembers your choice after the first approval.
+See [macOS Gatekeeper Blocks the App](#macos-gatekeeper-blocks-the-app) for all Gatekeeper scenarios including this one, the "正在验证" spinner, and the "app is damaged" dialog.
 
 ### Ports Already In Use
 
