@@ -103,7 +103,7 @@ This is the most common first-launch issue. You double-click or right-click → 
 If this still does not work, run this command in Terminal to permanently remove the quarantine flag:
 
 ```bash
-xattr -cr /Applications/AI\ Debate\ Council.app
+sudo xattr -cr /Applications/AI\ Debate\ Council.app
 ```
 
 Then double-click the app normally. You only need to do this once.
@@ -123,7 +123,7 @@ When you open the `.dmg` installer or the app for the first time, macOS shows a 
 **If it keeps happening every time you open the app:**
 
 ```bash
-xattr -cr /Applications/AI\ Debate\ Council.app
+sudo xattr -cr /Applications/AI\ Debate\ Council.app
 ```
 
 This removes the quarantine flag that triggers the verification. You only need to run this once.
@@ -133,7 +133,7 @@ This removes the quarantine flag that triggers the verification. You only need t
 This does NOT mean the file is actually damaged. macOS shows this when Gatekeeper blocks an unsigned app. Fix:
 
 ```bash
-xattr -cr /Applications/AI\ Debate\ Council.app
+sudo xattr -cr /Applications/AI\ Debate\ Council.app
 ```
 
 Then double-click the app normally.
@@ -168,7 +168,7 @@ macOS shows this dialog when an app takes too long to display its first window. 
 1. **Click OK** to dismiss the dialog — do NOT force-quit the app yet.
 2. **Wait 30–60 seconds.** The splash screen should appear once Gatekeeper finishes and the app starts loading.
 3. **If nothing happens after 1 minute**, force-quit the app (right-click the Dock icon → Force Quit), then:
-   - Remove the quarantine flag: `xattr -cr /Applications/AI\ Debate\ Council.app`
+   - Remove the quarantine flag: `sudo xattr -cr /Applications/AI\ Debate\ Council.app`
    - Open the app again by right-clicking → Open in Finder
 
 This dialog typically only appears on the very first launch. Subsequent launches are much faster.
@@ -178,7 +178,7 @@ This dialog typically only appears on the very first launch. Subsequent launches
 If any of the above dialogs keep appearing, this single Terminal command fixes them all:
 
 ```bash
-xattr -cr /Applications/AI\ Debate\ Council.app
+sudo xattr -cr /Applications/AI\ Debate\ Council.app
 ```
 
 This removes the macOS quarantine attribute from the app. It is safe and you only need to run it once. After this, double-clicking the app works normally with no security prompts.

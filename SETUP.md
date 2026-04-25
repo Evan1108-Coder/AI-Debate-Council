@@ -89,7 +89,7 @@ Go to the [Releases page](https://github.com/Evan1108-Coder/AI-Debate-Council/re
 >
 > If that still doesn't work, open **Terminal** and run:
 > ```bash
-> xattr -cr /Applications/AI\ Debate\ Council.app
+> sudo xattr -cr /Applications/AI\ Debate\ Council.app
 > ```
 > Then double-click the app normally. This removes the quarantine flag permanently.
 
