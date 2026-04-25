@@ -165,6 +165,7 @@ When the app finishes loading, you'll see a welcome screen like this:
 ```
 
 **Don't panic if you see "Verified Models: 0" and "Providers Ready: 0".** This is normal — it means you haven't added API keys yet (Step 6). The app works fine; you just need to add at least one API key or enable mock mode.
+**Also don't panic if you see the layout of the app is similar but different to the ASCII welcome screen. It just needs to be similar.**
 
 ### Step 8: Start Your First Debate
 
