@@ -1,5 +1,5 @@
 const { app, BrowserWindow, dialog, shell, Menu } = require("electron");
-const { spawn } = require("child_process");
+const { spawn, execFileSync } = require("child_process");
 const path = require("path");
 const fs = require("fs");
 const net = require("net");
@@ -17,15 +17,47 @@ const projectRoot = app.isPackaged
   ? path.join(process.resourcesPath, "app-content")
   : path.resolve(__dirname, "..");
 
-function getVenvPython() {
-  if (process.platform === "win32") {
-    return path.join(projectRoot, ".venv", "Scripts", "python.exe");
-  }
-  return path.join(projectRoot, ".venv", "bin", "python");
+function getDataDir() {
+  return path.join(app.getPath("userData"), "backend-env");
 }
 
-function getNpmCommand() {
-  return process.platform === "win32" ? "npm.cmd" : "npm";
+function getVenvDir() {
+  if (app.isPackaged) {
+    return path.join(getDataDir(), ".venv");
+  }
+  return path.join(projectRoot, ".venv");
+}
+
+function getVenvPython() {
+  const venvDir = getVenvDir();
+  if (process.platform === "win32") {
+    return path.join(venvDir, "Scripts", "python.exe");
+  }
+  return path.join(venvDir, "bin", "python");
+}
+
+function findSystemPython() {
+  const candidates =
+    process.platform === "win32"
+      ? ["python3", "python"]
+      : ["python3.14", "python3.13", "python3.12", "python3.11", "python3"];
+
+  const env = getEnhancedEnv();
+  for (const cmd of candidates) {
+    try {
+      const ver = execFileSync(cmd, ["--version"], {
+        env,
+        timeout: 5000,
+        encoding: "utf8",
+        windowsHide: true,
+      }).trim();
+      const match = ver.match(/Python (\d+)\.(\d+)/);
+      if (match && Number(match[1]) >= 3 && Number(match[2]) >= 10) {
+        return cmd;
+      }
+    } catch (_) {}
+  }
+  return null;
 }
 
 function getEnhancedEnv() {
@@ -36,7 +68,6 @@ function getEnhancedEnv() {
       "/opt/homebrew/sbin",
       "/usr/local/bin",
       "/usr/local/sbin",
-      path.join(process.env.HOME || "", ".nvm/versions/node"),
       "/usr/bin",
       "/bin",
       "/usr/sbin",
@@ -77,18 +108,24 @@ function waitForServer(url, timeoutMs = 60000) {
   return new Promise((resolve, reject) => {
     const check = () => {
       if (Date.now() - start > timeoutMs) {
-        reject(new Error(`Server at ${url} did not start within ${timeoutMs / 1000}s`));
+        reject(
+          new Error(
+            `Server at ${url} did not start within ${timeoutMs / 1000}s`
+          )
+        );
         return;
       }
-      http.get(url, (res) => {
-        if (res.statusCode === 200) {
-          resolve();
-        } else {
+      http
+        .get(url, (res) => {
+          if (res.statusCode === 200) {
+            resolve();
+          } else {
+            setTimeout(check, 500);
+          }
+        })
+        .on("error", () => {
           setTimeout(check, 500);
-        }
-      }).on("error", () => {
-        setTimeout(check, 500);
-      });
+        });
     };
     check();
   });
@@ -101,6 +138,25 @@ function updateSplashStatus(text) {
       `document.querySelector('.status').textContent = ${JSON.stringify(text)}`
     )
     .catch(() => {});
+}
+
+function closeSplash() {
+  if (splashWindow && !splashWindow.isDestroyed()) {
+    splashWindow.close();
+    splashWindow = null;
+  }
+}
+
+async function showErrorAndQuit(title, message) {
+  closeSplash();
+  await dialog.showMessageBox({
+    type: "error",
+    title,
+    message,
+    buttons: ["Quit"],
+  });
+  cleanup();
+  app.quit();
 }
 
 function createSplashWindow() {
@@ -227,7 +283,9 @@ function createSplashWindow() {
     </html>
   `;
 
-  splashWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(splashHtml)}`);
+  splashWindow.loadURL(
+    `data:text/html;charset=utf-8,${encodeURIComponent(splashHtml)}`
+  );
 }
 
 function createMainWindow() {
@@ -253,10 +311,7 @@ function createMainWindow() {
 
   mainWindow.webContents.once("did-finish-load", () => {
     if (!mainWindow) return;
-    if (splashWindow && !splashWindow.isDestroyed()) {
-      splashWindow.close();
-      splashWindow = null;
-    }
+    closeSplash();
     mainWindow.show();
     mainWindow.focus();
   });
@@ -333,129 +388,223 @@ function buildAppMenu() {
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
+async function ensureBackendVenv() {
+  const venvPython = getVenvPython();
+  if (fs.existsSync(venvPython)) return;
+
+  if (!app.isPackaged) {
+    throw new Error(
+      "Python virtual environment (.venv) not found.\n\n" +
+        "Run these commands first:\n" +
+        "python3 -m venv .venv\n" +
+        "source .venv/bin/activate\n" +
+        "pip install -r backend/requirements.txt"
+    );
+  }
+
+  updateSplashStatus("Setting up Python environment\u2026");
+
+  const systemPython = findSystemPython();
+  if (!systemPython) {
+    throw new Error(
+      "Python 3.10 or later is required but was not found.\n\n" +
+        "Please install Python from python.org and restart the app."
+    );
+  }
+
+  const venvDir = getVenvDir();
+  const dataDir = getDataDir();
+  fs.mkdirSync(dataDir, { recursive: true });
+
+  const env = getEnhancedEnv();
+
+  await runCommand(systemPython, ["-m", "venv", venvDir], {
+    env,
+    windowsHide: true,
+  });
+
+  updateSplashStatus("Installing Python packages\u2026");
+
+  const pipPython = venvPython;
+  const reqFile = path.join(projectRoot, "backend", "requirements.txt");
+
+  await runCommand(
+    pipPython,
+    ["-m", "pip", "install", "--no-cache-dir", "-r", reqFile],
+    { env, windowsHide: true }
+  );
+}
+
+function runCommand(cmd, args, opts = {}) {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(cmd, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      ...opts,
+    });
+    let stderr = "";
+    proc.stdout.on("data", (d) => process.stdout.write(`[setup] ${d}`));
+    proc.stderr.on("data", (d) => {
+      stderr += d;
+      process.stderr.write(`[setup] ${d}`);
+    });
+    proc.on("error", (err) =>
+      reject(new Error(`Failed to run ${cmd}: ${err.message}`))
+    );
+    proc.on("exit", (code) => {
+      if (code === 0) resolve();
+      else
+        reject(
+          new Error(`${cmd} exited with code ${code}\n${stderr.slice(-500)}`)
+        );
+    });
+  });
+}
+
 async function startBackend() {
   const python = getVenvPython();
 
-  if (!fs.existsSync(python)) {
-    await dialog.showMessageBox({
-      type: "error",
-      title: "Python Environment Not Found",
-      message:
-        "The Python virtual environment (.venv) was not found.\n\n" +
-        "Please run the setup instructions from SETUP.md first:\n\n" +
-        "python3.13 -m venv .venv\n" +
-        "source .venv/bin/activate\n" +
-        "pip install -r backend/requirements.txt",
-      buttons: ["Quit"],
-    });
-    app.quit();
-    return;
-  }
-
   const inUse = await isPortInUse(BACKEND_PORT);
   if (inUse) {
-    console.log(`Backend port ${BACKEND_PORT} already in use, assuming backend is running`);
+    console.log(
+      `Backend port ${BACKEND_PORT} already in use, assuming backend is running`
+    );
     return;
   }
 
   const env = { ...getEnhancedEnv(), PYTHONUNBUFFERED: "1" };
 
-  backendProcess = spawn(
-    python,
-    [
-      "-m",
-      "uvicorn",
-      "backend.app.main:app",
-      "--host",
-      "127.0.0.1",
-      "--port",
-      String(BACKEND_PORT),
-    ],
-    { cwd: projectRoot, env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true }
-  );
+  return new Promise((resolve, reject) => {
+    backendProcess = spawn(
+      python,
+      [
+        "-m",
+        "uvicorn",
+        "backend.app.main:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        String(BACKEND_PORT),
+      ],
+      {
+        cwd: projectRoot,
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      }
+    );
 
-  backendProcess.stdout.on("data", (data) => {
-    process.stdout.write(`[backend] ${data}`);
-  });
+    backendProcess.stdout.on("data", (data) => {
+      process.stdout.write(`[backend] ${data}`);
+    });
+    backendProcess.stderr.on("data", (data) => {
+      process.stderr.write(`[backend] ${data}`);
+    });
+    backendProcess.on("error", (err) => {
+      reject(new Error(`Backend failed to start: ${err.message}`));
+    });
+    backendProcess.on("exit", (code) => {
+      console.log(`Backend exited with code ${code}`);
+      backendProcess = null;
+    });
 
-  backendProcess.stderr.on("data", (data) => {
-    process.stderr.write(`[backend] ${data}`);
-  });
-
-  backendProcess.on("exit", (code) => {
-    console.log(`Backend exited with code ${code}`);
-    backendProcess = null;
+    resolve();
   });
 }
 
 async function startFrontend() {
   const inUse = await isPortInUse(FRONTEND_PORT);
   if (inUse) {
-    console.log(`Frontend port ${FRONTEND_PORT} already in use, assuming frontend is running`);
+    console.log(
+      `Frontend port ${FRONTEND_PORT} already in use, assuming frontend is running`
+    );
     return;
   }
 
-  const npm = getNpmCommand();
   const frontendDir = path.join(projectRoot, "frontend");
+  const standaloneServer = path.join(
+    frontendDir,
+    ".next",
+    "standalone",
+    "server.js"
+  );
+
+  if (app.isPackaged && fs.existsSync(standaloneServer)) {
+    const electronExe = process.execPath;
+    const env = {
+      ...getEnhancedEnv(),
+      ELECTRON_RUN_AS_NODE: "1",
+      PORT: String(FRONTEND_PORT),
+      HOSTNAME: "127.0.0.1",
+    };
+
+    return new Promise((resolve, reject) => {
+      frontendProcess = spawn(electronExe, [standaloneServer], {
+        cwd: path.join(frontendDir, ".next", "standalone"),
+        env,
+        stdio: ["ignore", "pipe", "pipe"],
+        windowsHide: true,
+      });
+
+      frontendProcess.stdout.on("data", (data) => {
+        process.stdout.write(`[frontend] ${data}`);
+      });
+      frontendProcess.stderr.on("data", (data) => {
+        process.stderr.write(`[frontend] ${data}`);
+      });
+      frontendProcess.on("error", (err) => {
+        reject(new Error(`Frontend failed to start: ${err.message}`));
+      });
+      frontendProcess.on("exit", (code) => {
+        console.log(`Frontend exited with code ${code}`);
+        frontendProcess = null;
+      });
+
+      resolve();
+    });
+  }
 
   const env = getEnhancedEnv();
 
   if (!fs.existsSync(path.join(frontendDir, "node_modules"))) {
     console.log("Installing frontend dependencies...");
     updateSplashStatus("Installing frontend dependencies\u2026");
-    const install = spawn(npm, ["install"], {
+    const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+    await runCommand(npm, ["install"], {
       cwd: frontendDir,
       env,
-      stdio: ["ignore", "pipe", "pipe"],
       shell: true,
       windowsHide: true,
-    });
-    install.stdout.on("data", (data) => {
-      process.stdout.write(`[npm] ${data}`);
-    });
-    install.stderr.on("data", (data) => {
-      process.stderr.write(`[npm] ${data}`);
-    });
-    await new Promise((resolve, reject) => {
-      install.on("exit", (code) => {
-        if (code === 0) resolve();
-        else reject(new Error(`npm install exited with code ${code}`));
-      });
     });
   }
 
   const nextBin = path.join(frontendDir, "node_modules", ".bin", "next");
   const builtDir = path.join(frontendDir, ".next");
+  const cmd = fs.existsSync(builtDir) ? "start" : "dev";
 
-  if (fs.existsSync(builtDir)) {
-    frontendProcess = spawn(nextBin, ["start", "-p", String(FRONTEND_PORT)], {
+  return new Promise((resolve, reject) => {
+    frontendProcess = spawn(nextBin, [cmd, "-p", String(FRONTEND_PORT)], {
       cwd: frontendDir,
       env,
       stdio: ["ignore", "pipe", "pipe"],
       shell: process.platform === "win32",
       windowsHide: true,
     });
-  } else {
-    frontendProcess = spawn(nextBin, ["dev", "-p", String(FRONTEND_PORT)], {
-      cwd: frontendDir,
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-      shell: process.platform === "win32",
-      windowsHide: true,
+
+    frontendProcess.stdout.on("data", (data) => {
+      process.stdout.write(`[frontend] ${data}`);
     });
-  }
+    frontendProcess.stderr.on("data", (data) => {
+      process.stderr.write(`[frontend] ${data}`);
+    });
+    frontendProcess.on("error", (err) => {
+      reject(new Error(`Frontend failed to start: ${err.message}`));
+    });
+    frontendProcess.on("exit", (code) => {
+      console.log(`Frontend exited with code ${code}`);
+      frontendProcess = null;
+    });
 
-  frontendProcess.stdout.on("data", (data) => {
-    process.stdout.write(`[frontend] ${data}`);
-  });
-
-  frontendProcess.stderr.on("data", (data) => {
-    process.stderr.write(`[frontend] ${data}`);
-  });
-
-  frontendProcess.on("exit", (code) => {
-    console.log(`Frontend exited with code ${code}`);
-    frontendProcess = null;
+    resolve();
   });
 }
 
@@ -463,7 +612,9 @@ function stopProcess(proc) {
   if (!proc || proc.killed) return;
   try {
     if (process.platform === "win32") {
-      spawn("taskkill", ["/pid", String(proc.pid), "/f", "/t"], { windowsHide: true });
+      spawn("taskkill", ["/pid", String(proc.pid), "/f", "/t"], {
+        windowsHide: true,
+      });
     } else {
       proc.kill("SIGTERM");
     }
@@ -482,11 +633,17 @@ app.on("ready", async () => {
   createSplashWindow();
 
   try {
+    updateSplashStatus("Preparing environment\u2026");
+    await ensureBackendVenv();
+
     updateSplashStatus("Starting backend and frontend\u2026");
     await Promise.all([startBackend(), startFrontend()]);
 
     updateSplashStatus("Waiting for backend\u2026");
-    await waitForServer(`http://127.0.0.1:${BACKEND_PORT}/health`, 120000);
+    await waitForServer(
+      `http://127.0.0.1:${BACKEND_PORT}/health`,
+      120000
+    );
     console.log("Backend is ready.");
 
     updateSplashStatus("Waiting for frontend\u2026");
@@ -496,18 +653,11 @@ app.on("ready", async () => {
     updateSplashStatus("Loading app\u2026");
     createMainWindow();
   } catch (err) {
-    if (splashWindow && !splashWindow.isDestroyed()) {
-      splashWindow.close();
-      splashWindow = null;
-    }
-    await dialog.showMessageBox({
-      type: "error",
-      title: "Startup Error",
-      message: `Failed to start AI Debate Council:\n\n${err.message}`,
-      buttons: ["Quit"],
-    });
-    cleanup();
-    app.quit();
+    console.error("Startup error:", err);
+    await showErrorAndQuit(
+      "Startup Error",
+      `Failed to start AI Debate Council:\n\n${err.message}`
+    );
   }
 });
 

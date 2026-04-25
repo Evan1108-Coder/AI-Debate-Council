@@ -8,9 +8,10 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
-    "build:mac": "electron-builder --mac",
-    "build:win": "electron-builder --win",
-    "build:all": "electron-builder --mac --win",
+    "prebuild": "node scripts/prepare-frontend.js",
+    "build:mac": "npm run prebuild && electron-builder --mac",
+    "build:win": "npm run prebuild && electron-builder --win",
+    "build:all": "npm run prebuild && electron-builder --mac --win",
     "pack": "electron-builder --dir"
   },
   "build": {
@@ -24,6 +25,7 @@
       "main.js",
       "package.json"
     ],
+    "afterPack": "scripts/after-pack.js",
     "extraResources": [
       {
         "from": "../backend",
@@ -36,12 +38,9 @@
         ]
       },
       {
-        "from": "../frontend",
-        "to": "app-content/frontend",
-        "filter": [
-          "**/*",
-          "!**/.next/cache/**"
-        ]
+        "from": ".frontend-bundle",
+        "to": "app-content/frontend/.next/standalone",
+        "filter": ["**/*"]
       },
       {
         "from": "../.env.example",
