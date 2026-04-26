@@ -7,7 +7,8 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "sw
 
 export const metadata: Metadata = {
   title: "AI Debate Council",
-  description: "Multiple AI models debate a topic together."
+  description: "Multiple AI models debate a topic together.",
+  icons: { icon: "/favicon.svg" }
 };
 
 const themeScript = `(function(){try{var t=localStorage.getItem("adc-theme")||"Light";if(t==="Dark")document.documentElement.classList.add("dark");else if(t==="System"&&window.matchMedia("(prefers-color-scheme:dark)").matches)document.documentElement.classList.add("dark")}catch(e){}})()`;

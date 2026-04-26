@@ -602,7 +602,10 @@ class Database:
             row = connection.execute(
                 "SELECT value FROM app_metadata WHERE key = ?", (COUNCIL_SETTINGS_KEY,)
             ).fetchone()
-            raw = json.loads(row["value"] or "{}") if row else {}
+            try:
+                raw = json.loads(row["value"] or "{}") if row else {}
+            except json.JSONDecodeError:
+                raw = {}
             return self._normalize_council_settings(raw)
 
     def update_council_settings(self, updates: dict) -> dict:
@@ -612,7 +615,10 @@ class Database:
             row = connection.execute(
                 "SELECT value FROM app_metadata WHERE key = ?", (COUNCIL_SETTINGS_KEY,)
             ).fetchone()
-            current = json.loads(row["value"] or "{}") if row else {}
+            try:
+                current = json.loads(row["value"] or "{}") if row else {}
+            except json.JSONDecodeError:
+                current = {}
             if isinstance(cleaned.get("confirmation_preferences"), dict):
                 current_preferences = (
                     current.get("confirmation_preferences")
@@ -1026,14 +1032,22 @@ class Database:
     def _settings_row_to_dict(self, row: sqlite3.Row | None) -> dict | None:
         if not row:
             return None
+        try:
+            role_models = json.loads(row["role_models"] or "{}")
+        except json.JSONDecodeError:
+            role_models = {}
+        try:
+            agent_settings = json.loads(row["agent_settings"] or "{}")
+        except json.JSONDecodeError:
+            agent_settings = {}
         return self._normalize_settings(
             {
-                "role_models": json.loads(row["role_models"] or "{}"),
+                "role_models": role_models,
                 "overall_model": row["overall_model"],
                 "debaters_per_team": row["debaters_per_team"],
                 "discussion_messages_per_team": row["discussion_messages_per_team"],
                 "judge_assistant_enabled": bool(row["judge_assistant_enabled"]),
-                "agent_settings": json.loads(row["agent_settings"] or "{}"),
+                "agent_settings": agent_settings,
                 "temperature": row["temperature"],
                 "max_tokens": row["max_tokens"],
                 "debate_tone": row["debate_tone"],

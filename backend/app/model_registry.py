@@ -219,7 +219,8 @@ async def verify_model_runtime(
             )
         except Exception as exc:
             last_exc = exc
-    assert last_exc is not None
+    if last_exc is None:
+        raise RuntimeError("Model probe loop exited without success or exception")
     reason, ttl_seconds = _probe_error_reason(model, str(last_exc))
     if any(
         marker in reason.lower()

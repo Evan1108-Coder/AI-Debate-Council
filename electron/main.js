@@ -25,7 +25,11 @@ function getVenvDir() {
   if (app.isPackaged) {
     return path.join(getDataDir(), ".venv");
   }
-  return path.join(projectRoot, ".venv");
+  const dotVenv = path.join(projectRoot, ".venv");
+  if (fs.existsSync(dotVenv)) return dotVenv;
+  const plainVenv = path.join(projectRoot, "venv");
+  if (fs.existsSync(plainVenv)) return plainVenv;
+  return dotVenv;
 }
 
 function getVenvPython() {
