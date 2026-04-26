@@ -282,7 +282,7 @@ class DebateManager:
         async with self._lock:
             if len(self._active_debates) >= settings.max_active_debates:
                 raise DebateError(
-                    "Only 3 debates can run at the same time. Try again when one finishes."
+                    f"Only {settings.max_active_debates} debates can run at the same time. Try again when one finishes."
                 )
             debate = self.db.create_debate(session_id, cleaned_topic)
             debate_id = debate["id"]
@@ -704,7 +704,7 @@ class DebateManager:
             async with self._lock:
                 if len(self._active_debates) >= settings.max_active_debates:
                     raise DebateError(
-                        "Only 3 debates can run at the same time. Try again when one finishes."
+                        f"Only {settings.max_active_debates} debates can run at the same time. Try again when one finishes."
                     )
                 debate = self.db.create_debate(
                     session_id,
@@ -2474,7 +2474,8 @@ class DebateManager:
                 last_exc = exc
                 continue
         if response is None:
-            assert last_exc is not None
+            if last_exc is None:
+                raise DebateError(f"{model.name} failed while preparing private notes: no response received")
             self._maybe_disable_model_route(model, last_exc)
             raise DebateError(
                 f"{model.name} failed while preparing private notes: {self._provider_error_message(last_exc)}"
@@ -4103,7 +4104,8 @@ class DebateManager:
                     raise CompletionStreamError(exc, had_output=True) from exc
                 continue
         else:
-            assert last_exc is not None
+            if last_exc is None:
+                raise EmptyCompletionError(f"{model.name} returned no response after all retries.")
             raise CompletionStreamError(last_exc, had_output=False) from last_exc
 
         content = sanitize_model_text("".join(parts)).strip()

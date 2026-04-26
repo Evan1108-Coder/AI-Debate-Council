@@ -7,7 +7,8 @@ const inter = Inter({ subsets: ["latin"], variable: "--font-inter", display: "sw
 
 export const metadata: Metadata = {
   title: "AI Debate Council",
-  description: "Multiple AI models debate a topic together."
+  description: "Multiple AI models debate a topic together.",
+  icons: { icon: "/favicon.svg" }
 };
 
 export default function RootLayout({

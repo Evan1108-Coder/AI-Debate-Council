@@ -11,6 +11,13 @@ PROJECT_ROOT = Path(__file__).resolve().parent
 
 
 def venv_python() -> str:
+    for venv_dir in (".venv", "venv"):
+        if os.name == "nt":
+            candidate = PROJECT_ROOT / venv_dir / "Scripts" / "python.exe"
+        else:
+            candidate = PROJECT_ROOT / venv_dir / "bin" / "python"
+        if candidate.exists():
+            return str(candidate)
     if os.name == "nt":
         return str(PROJECT_ROOT / ".venv" / "Scripts" / "python.exe")
     return str(PROJECT_ROOT / ".venv" / "bin" / "python")

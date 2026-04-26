@@ -805,7 +805,13 @@ export default function Home() {
 
     websocket.onmessage = (event) => {
       serverStarted = true;
-      const payload = JSON.parse(event.data) as DebateEvent;
+      let payload: DebateEvent;
+      try {
+        payload = JSON.parse(event.data) as DebateEvent;
+      } catch {
+        recordRuntimeDiary("websocket parse error", "Received malformed WebSocket message.", sessionId);
+        return;
+      }
       if (
         payload.type === "debate_completed" ||
         payload.type === "interaction_completed" ||
@@ -854,6 +860,7 @@ export default function Home() {
           ...current,
           [sessionId]: `Connection failed. Retrying (${attempt + 1}/${WEBSOCKET_CONNECT_RETRIES})...`
         }));
+        clearSocketRetry(sessionId);
         retryTimerRefs.current[sessionId] = setTimeout(() => {
           const retryModelName = modelBySessionRef.current[sessionId] || modelName;
           openInteractionSocket(sessionId, content, retryModelName, attempt + 1, options);
@@ -1072,7 +1079,7 @@ export default function Home() {
           [sessionId]: [
             ...currentMessages.filter((message) => message.id !== event.message.id),
             event.message
-          ].sort((left, right) => left.sequence - right.sequence)
+          ].sort((left, right) => (left.sequence ?? 0) - (right.sequence ?? 0))
         };
       });
       setPartialBySession((current) => {
@@ -1377,7 +1384,7 @@ function NewChatModal({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4" onClick={(e) => { if (e.target === e.currentTarget) onCancel(); }}>
       <div className="flex max-h-[90vh] w-full max-w-4xl overflow-hidden rounded-md border border-zinc-300 bg-white shadow-xl">
         <aside className="w-44 shrink-0 border-r border-zinc-300 bg-zinc-50 p-3">
           {(["mode", "settings"] as const).map((tab) => (
@@ -1706,7 +1713,7 @@ function ConfirmDialog({
       : "Deleting...";
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4" onClick={(e) => { if (e.target === e.currentTarget && !isWorking) onCancel(); }}>
       <div
         role="dialog"
         aria-modal="true"

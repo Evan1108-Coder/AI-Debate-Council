@@ -233,10 +233,11 @@ def get_user_debate_profile_overview() -> dict:
         recommendations.append(f"Practice the {less_practiced_side.upper()} side next to keep your side history balanced.")
     if not recommendations:
         recommendations.append("No reliable training recommendation yet. Finish one practice debate first.")
+    trainer_notes = profile.get("trainer_notes") or ["No trainer notes yet."]
     coach_summary = (
         f"Practice debates completed: {practice_total}. "
         f"Decided wins: {decided_total}. "
-        f"Most recent coaching note: {profile.get('trainer_notes', ['No trainer notes yet.'])[-1]}"
+        f"Most recent coaching note: {trainer_notes[-1]}"
     )
     return {
         "profile": profile,
