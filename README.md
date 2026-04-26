@@ -6,6 +6,34 @@ AI Debate Council is a full-stack web application where two AI teams — Pro and
 
 The backend is Python 3.13, FastAPI, SQLite, WebSockets, and LiteLLM. The frontend is Next.js, React, TypeScript, and Tailwind CSS.
 
+## Screenshots
+
+### AI vs AI Debate — Judge Verdict and Cost Tracking
+
+![Debate Session with Judge Verdict](docs/images/debate-session.png)
+
+### Graphs & Statistics — Debate Analytics Dashboard
+
+![Graphs and Statistics Panel](docs/images/graphs-stats.png)
+
+### Debate Intelligence — Claims, Challenges, and Verdict Review
+
+![Debate Intelligence Panel](docs/images/debate-intelligence.png)
+
+### AI Debater Experiences — Global Memory Layer
+
+![AI Debater Experiences](docs/images/ai-experiences.png)
+
+### User Debate Profile — Training Dashboard
+
+![User Debate Profile](docs/images/user-profile.png)
+
+### Council Settings and Dark Mode
+
+| Light | Dark |
+|-------|------|
+| ![Council Settings](docs/images/council-settings.png) | ![Dark Mode](docs/images/dark-mode.png) |
+
 ## Table of Contents
 
 - [Features](#features)
