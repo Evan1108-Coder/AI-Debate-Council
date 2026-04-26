@@ -6,6 +6,50 @@ AI Debate Council is a multi-AI debate system where two AI teams — Pro and Con
 
 The backend is Python 3.13, FastAPI, SQLite, WebSockets, and LiteLLM. The frontend is Next.js, React, TypeScript, and Tailwind CSS. The desktop shell is Electron.
 
+## Screenshots
+
+### AI vs AI Debate — Judge Verdict and Cost Tracking
+
+A completed council debate showing the Judge's verdict with weighted analytics scores, cost estimation, and the message input area.
+
+![Debate Session with Judge Verdict](docs/images/debate-session.png)
+
+### Graphs & Statistics — Debate Analytics Dashboard
+
+Phase timeline, voting results, Bayesian analysis, role weights, and debate flow visualization after a completed debate.
+
+![Graphs and Statistics Panel](docs/images/graphs-stats.png)
+
+### Debate Intelligence — Claims, Challenges, and Verdict Review
+
+Structured records extracted from the debate transcript: tracked claims, open challenges, evidence records, and the post-debate review summary.
+
+![Debate Intelligence Panel](docs/images/debate-intelligence.png)
+
+### AI Debater Experiences — Global Memory Layer
+
+Long-term memory showing what the council has learned across all debates. Records are factual and backed by saved debate objects.
+
+![AI Debater Experiences](docs/images/ai-experiences.png)
+
+### User Debate Profile — Training Dashboard
+
+Practice history, coaching summary, performance snapshot, and recommended next drills based on real debate results.
+
+![User Debate Profile](docs/images/user-profile.png)
+
+### Council Settings — Appearance and Behavior
+
+Theme selection (Light/Dark/System), universal experience toggles, confirmation preferences, and debate intelligence defaults.
+
+![Council Settings](docs/images/council-settings.png)
+
+### Dark Mode
+
+Full dark mode support across all panels and pages.
+
+![Dark Mode](docs/images/dark-mode.png)
+
 ## Table of Contents
 
 - [Features](#features)

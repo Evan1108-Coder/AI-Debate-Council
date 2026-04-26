@@ -271,6 +271,22 @@ Built installers appear in the `electron/dist/` directory.
 
 ---
 
+## What You'll See
+
+Once the app launches, you'll see the main workspace with the sidebar on the left and the debate area on the right.
+
+![Debate Session View](docs/images/debate-session.png)
+
+*The debate session view showing a completed AI vs AI debate with Judge verdict, cost tracking, and the message input area.*
+
+Click **Graphs & Statistics** to see detailed analytics after a debate completes:
+
+![Graphs and Statistics](docs/images/graphs-stats.png)
+
+*Phase timeline, voting results, Bayesian analysis, and role weights generated from the debate transcript.*
+
+---
+
 ## Updating
 
 Download the latest installer from [Releases](https://github.com/Evan1108-Coder/AI-Debate-Council/releases) and install over the existing version. Your `.env` file and database are preserved.
