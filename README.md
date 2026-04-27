@@ -6,7 +6,7 @@ AI Debate Council is a multi-AI debate system where two AI teams — Pro and Con
 
 The backend is Python 3.13, FastAPI, SQLite, WebSockets, and LiteLLM. The frontend is Next.js, React, TypeScript, and Tailwind CSS. The desktop shell is Electron.
 
-## Screenshots
+## Screenshots: These values inside the screenshots are placeholders, so they are not real information to be judged.
 
 ### AI vs AI Debate — Judge Verdict and Cost Tracking
 
