@@ -34,6 +34,20 @@ The backend is Python 3.13, FastAPI, SQLite, WebSockets, and LiteLLM. The fronte
 |-------|------|
 | ![Council Settings](docs/images/council-settings.png) | ![Dark Mode](docs/images/dark-mode.png) |
 
+## Diagrams
+
+### System Architecture
+
+![System Architecture](docs/images/architecture.png)
+
+*Three-layer architecture: Next.js client communicates over HTTP and WebSockets with a FastAPI server backed by SQLite, while a LiteLLM router dispatches LLM calls to five AI providers.*
+
+### Debate Flow
+
+![Debate Flow](docs/images/debate-flow.png)
+
+*End-to-end flow from topic entry through setup, multi-round debate with four specialist roles per team, real-time WebSocket streaming, analytics-weighted judgment, and post-debate intelligence.*
+
 ## Table of Contents
 
 - [Features](#features)
