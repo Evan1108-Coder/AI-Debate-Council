@@ -50,6 +50,20 @@ Full dark mode support across all panels and pages.
 
 ![Dark Mode](docs/images/dark-mode.png)
 
+## Diagrams
+
+### System Architecture
+
+![System Architecture](docs/images/architecture.png)
+
+*Three-layer architecture: Next.js client communicates over HTTP and WebSockets with a FastAPI server backed by SQLite, while a LiteLLM router dispatches LLM calls to five AI providers.*
+
+### Debate Flow
+
+![Debate Flow](docs/images/debate-flow.png)
+
+*End-to-end flow from topic entry through setup, multi-round debate with four specialist roles per team, real-time WebSocket streaming, analytics-weighted judgment, and post-debate intelligence.*
+
 ## Table of Contents
 
 - [Features](#features)
