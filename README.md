@@ -1,8 +1,11 @@
-# AI Debate Council — Desktop App
+# AI Debate Council
 
-> **This is the `master-app-interface` branch** — the Electron desktop application (macOS `.dmg` / Windows `.exe`). For the web version that runs in your browser, see the [`master-website-interface`](https://github.com/Evan1108-Coder/AI-Debate-Council/tree/master-website-interface) branch.
+AI Debate Council is a full-stack application where two AI teams — Pro and Con — debate any topic you choose in real time, or where you can practice debating directly against an AI opponent. Each AI team fields up to four specialist debaters with distinct roles. After the debate, an optional Judge Assistant audits the transcript for missed points, and the Judge system can use either one Judge or a 3/5-person judge panel with analytics-weighted scoring. The entire exchange streams token by token over WebSockets so you can watch it unfold live.
 
-AI Debate Council is a multi-AI debate system where two AI teams — Pro and Con — debate any topic you choose in real time, or where you can practice debating directly against an AI opponent. This branch packages the application as a native desktop app using Electron. The app runs like a normal desktop application — it starts the Python backend and Next.js frontend as invisible background processes and displays the UI in a native window. There is no terminal window or console box visible during startup.
+This project supports two deployment modes from a single codebase:
+
+- **Web Application** — runs in your browser via `dev.py` (backend on port 8000, frontend on port 6001)
+- **Desktop Application** — an Electron wrapper that bundles the backend and frontend into a native app for macOS (`.dmg`) and Windows (`.exe`), with no terminal window visible during startup
 
 The backend is Python 3.13, FastAPI, SQLite, WebSockets, and LiteLLM. The frontend is Next.js, React, TypeScript, and Tailwind CSS. The desktop shell is Electron.
 
@@ -76,11 +79,11 @@ Full dark mode support across all panels and pages.
 - [Session and Debate Management](#session-and-debate-management)
 - [API Reference](#api-reference)
 - [WebSocket Protocol](#websocket-protocol)
-- [Desktop App (This Branch)](#desktop-app-this-branch)
+- [Desktop App](#desktop-app)
 - [Quick Start (Web Version)](#quick-start-web-version)
 - [Running Tests](#running-tests)
 - [Development Notes](#development-notes)
-- [Branches](#branches)
+- [Deployment Modes](#deployment-modes)
 - [Related Documentation](#related-documentation)
 - [License](#license)
 
@@ -535,9 +538,9 @@ In practice mode, send `{"type": "end_practice_debate", "model": "model-name"}` 
 | `interaction_completed` | Chat finished. Includes `cost_summary`. |
 | `error` | An error occurred. Includes error message string. |
 
-## Desktop App (This Branch)
+## Desktop App
 
-This branch (`master-app-interface`) wraps the web application in an Electron shell that runs as a native desktop app on macOS and Windows. The app starts the Python backend and Next.js frontend as invisible background processes — no terminal window or console box appears during startup. The app can be launched directly from Finder or the Start Menu; no terminal needs to be open. A frameless splash screen with a close button is shown while the servers start. Closing the splash screen during startup cleanly terminates all background processes.
+The `electron/` directory wraps the web application in an Electron shell that runs as a native desktop app on macOS and Windows. The app starts the Python backend and Next.js frontend as invisible background processes — no terminal window or console box appears during startup. The app can be launched directly from Finder or the Start Menu; no terminal needs to be open. A frameless splash screen with a close button is shown while the servers start. Closing the splash screen during startup cleanly terminates all background processes.
 
 ### Pre-built Installers
 
@@ -601,7 +604,6 @@ Copy-Item .env.example .env
 ```bash
 git clone https://github.com/Evan1108-Coder/AI-Debate-Council.git
 cd AI-Debate-Council
-git checkout master-app-interface
 
 # Set up backend and frontend first
 python3.13 -m venv .venv
@@ -631,7 +633,7 @@ This starts Electron, which launches the backend and frontend as background proc
 
 ## Quick Start (Web Version)
 
-For the web version, switch to the `master-website-interface` branch. See [SETUP.md](SETUP.md) for detailed instructions.
+See [SETUP.md](SETUP.md) for detailed instructions.
 
 ```bash
 python3.13 -m venv .venv
@@ -690,14 +692,14 @@ For local UI testing without real model calls, set `MOCK_LLM_RESPONSES=true` in 
 
 The backend loads `.env` from the project root first, then `backend/.env` as an override. Shell-level environment variables are overridden by the `.env` files to prevent stale keys from silently unlocking providers.
 
-## Branches
+## Deployment Modes
 
-| Branch | Description |
-| --- | --- |
-| `master-website-interface` | Web application. Run in the browser via `dev.py` or separate backend/frontend commands. |
-| `master-app-interface` | Desktop application. Electron wrapper that bundles the backend and frontend into a native app for macOS (.dmg) and Windows (.exe). |
+Both the web and desktop versions live on the `main` branch. The core backend and frontend code is identical — the desktop version simply adds an Electron shell (in `electron/`) that starts the servers as invisible background processes and displays the frontend in a native window with a splash screen.
 
-Both branches share the same backend and frontend code. The app branch adds an Electron shell that starts the servers as invisible background processes (no terminal or console windows) and displays the frontend in a native window with a splash screen during startup.
+| Mode | How to Run | Details |
+| --- | --- | --- |
+| **Web** | `python dev.py` or separate backend + frontend terminals | See [Quick Start (Web Version)](#quick-start-web-version) |
+| **Desktop App** | Build with `npm run build:mac` / `build:win` in `electron/`, or run `npm start` for dev mode | See [Desktop App](#desktop-app) |
 
 ## Related Documentation
 

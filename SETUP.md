@@ -1,12 +1,271 @@
-# Setup — AI Debate Council (Desktop App)
+# Setup — AI Debate Council
 
 A complete beginner-friendly guide. Follow every step in order. If anything goes wrong, see [TROUBLESHOOTING.md](TROUBLESHOOTING.md).
 
-> **Looking for the web version?** Switch to the `master-website-interface` branch.
+This project supports two deployment modes from a single codebase. Choose one:
+
+| Mode | Best For | Requirements |
+| --- | --- | --- |
+| **[Web Application](#web-application-setup)** | Development, custom hosting, Linux | Python 3.13, Node.js 20+, npm 10+ |
+| **[Desktop Application](#desktop-application-setup)** | End users who want a native app | Python 3.10+ (Node.js not required) |
+
+Both modes need at least one AI provider API key — or set `MOCK_LLM_RESPONSES=true` to test without one.
 
 ---
 
-## What You Need Before Starting
+## Web Application Setup
+
+### macOS
+
+#### Step 1: Install Python 3.13
+
+With Homebrew:
+
+```bash
+brew install python@3.13
+```
+
+Or download from [python.org/downloads](https://www.python.org/downloads/).
+
+Verify:
+
+```bash
+python3.13 --version
+```
+
+#### Step 2: Clone the Repository
+
+```bash
+git clone https://github.com/Evan1108-Coder/AI-Debate-Council.git
+cd AI-Debate-Council
+```
+
+#### Step 3: Create and Activate a Virtual Environment
+
+```bash
+python3.13 -m venv .venv
+source .venv/bin/activate
+```
+
+You should see `(.venv)` in your terminal prompt.
+
+#### Step 4: Install Backend Dependencies
+
+```bash
+python -m pip install --upgrade pip
+pip install -r backend/requirements.txt
+```
+
+This installs FastAPI, Uvicorn, LiteLLM, and python-dotenv.
+
+#### Step 5: Create the Environment File
+
+```bash
+cp .env.example .env
+```
+
+#### Step 6: Add API Keys
+
+Open `.env` in any text editor and add at least one provider API key:
+
+```text
+OPENAI_API_KEY=sk-your-key-here
+ANTHROPIC_API_KEY=sk-ant-your-key-here
+```
+
+One provider key unlocks all models from that provider. For example, one `OPENAI_API_KEY` unlocks `gpt-5.4-pro`, `gpt-5.4-mini`, `gpt-4o`, and `gpt-4o-mini`. The frontend dropdown shows only unlocked models.
+
+**Do not put model names in `.env`.** The app detects models automatically from your API keys.
+
+See [ENVREADME.md](ENVREADME.md) for the full list of 21 models across 6 providers.
+
+#### Step 7: Install Frontend Dependencies
+
+```bash
+cd frontend
+npm install
+cd ..
+```
+
+#### Step 8: Start the Whole App in One Terminal (Recommended)
+
+```bash
+.venv/bin/python dev.py
+```
+
+This starts the backend on `8000` and the frontend on `6001` together.
+
+#### Step 9: Or Start the Backend and Frontend Separately
+
+Backend:
+
+```bash
+.venv/bin/python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+This command deliberately uses the Python inside `.venv`, so it still works if your terminal says `uvicorn: command not found`.
+
+Verify it works:
+
+```text
+http://localhost:8000/health
+```
+
+Should return `{"status":"ok","database":"...","active_debates":0}`.
+
+Check your models:
+
+```text
+http://localhost:8000/api/models
+```
+
+Frontend (new terminal):
+
+```bash
+cd frontend
+npm run dev -- -p 6001
+```
+
+#### Step 10: Open the App
+
+```text
+http://localhost:6001
+```
+
+Click the **+** button in the sidebar to create your first session. The setup modal lets you choose:
+
+- **AI vs AI Debate**: the Pro and Con council debate each other.
+- **AI vs Human Debate Training**: you debate a Practice Debater and receive Judge, Judge Assistant, and Debate Trainer feedback.
+
+After the chat is created, select an Overall Model from the dropdown and type either a normal message or a debate topic.
+
+### Windows PowerShell
+
+#### Step 1: Install Python 3.13
+
+Download from [python.org/downloads](https://www.python.org/downloads/).
+
+During installation, **check the box to add Python to PATH**.
+
+Verify:
+
+```powershell
+py -3.13 --version
+```
+
+#### Step 2: Install Node.js
+
+Download from [nodejs.org](https://nodejs.org/). The LTS version (20+) is recommended.
+
+Verify:
+
+```powershell
+node --version
+npm --version
+```
+
+#### Step 3: Clone the Repository
+
+```powershell
+git clone https://github.com/Evan1108-Coder/AI-Debate-Council.git
+cd AI-Debate-Council
+```
+
+#### Step 4: Create and Activate a Virtual Environment
+
+```powershell
+py -3.13 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+```
+
+If PowerShell blocks activation with a security error:
+
+```powershell
+Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+.\.venv\Scripts\Activate.ps1
+```
+
+You should see `(.venv)` in your terminal prompt.
+
+#### Step 5: Install Backend Dependencies
+
+```powershell
+python -m pip install --upgrade pip
+pip install -r backend/requirements.txt
+```
+
+#### Step 6: Create the Environment File
+
+```powershell
+Copy-Item .env.example .env
+```
+
+#### Step 7: Add API Keys
+
+Open `.env` in any text editor (Notepad, VS Code, etc.) and add at least one provider API key. Do not add model names. See [ENVREADME.md](ENVREADME.md) for details.
+
+#### Step 8: Install Frontend Dependencies
+
+```powershell
+cd frontend
+npm install
+cd ..
+```
+
+#### Step 9: Start the Whole App in One PowerShell Window (Recommended)
+
+```powershell
+.\.venv\Scripts\python dev.py
+```
+
+#### Step 10: Or Start the Backend and Frontend Separately
+
+Backend:
+
+```powershell
+.\.venv\Scripts\python -m uvicorn backend.app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+Frontend (new PowerShell window):
+
+```powershell
+cd frontend
+npm run dev -- -p 6001
+```
+
+Open `http://localhost:6001`.
+
+### Linux
+
+The steps are the same as macOS. Install Python 3.13 from your distribution's package manager or from [python.org](https://www.python.org/downloads/). Example for Ubuntu/Debian:
+
+```bash
+sudo apt update
+sudo apt install python3.13 python3.13-venv
+```
+
+Then follow macOS Steps 2–10.
+
+### Optional Frontend Environment
+
+The frontend defaults to connecting to `http://localhost:8000` for the API and `ws://localhost:8000` for WebSocket.
+
+If the backend runs on a different host or port, create `frontend/.env.local`:
+
+```text
+NEXT_PUBLIC_API_URL=http://localhost:8001
+NEXT_PUBLIC_WS_URL=ws://localhost:8001
+```
+
+Restart the frontend dev server after changing `.env.local`.
+
+---
+
+## Desktop Application Setup
+
+The desktop app wraps the same web application in an Electron shell. It starts the Python backend and Next.js frontend as invisible background processes — no terminal window appears. A splash screen shows progress during startup.
+
+### What You Need Before Starting
 
 | Requirement | Why |
 | --- | --- |
@@ -16,11 +275,19 @@ A complete beginner-friendly guide. Follow every step in order. If anything goes
 
 **You do NOT need Node.js.** The desktop app bundles the frontend — no npm commands required.
 
----
+### Pre-built Installers
 
-## macOS Setup
+Download from [Releases](https://github.com/Evan1108-Coder/AI-Debate-Council/releases):
 
-### Step 1: Install Python
+| Platform | File | Notes |
+| --- | --- | --- |
+| macOS (Apple Silicon) | `AI Debate Council-1.0.0-arm64.dmg` | M1/M2/M3/M4 Macs |
+| macOS (Intel) | `AI Debate Council-1.0.0.dmg` | Intel Macs |
+| Windows | `AI Debate Council Setup 1.0.0.exe` | 64-bit Windows |
+
+### macOS
+
+#### Step 1: Install Python
 
 If you already have Python 3.10+, skip to Step 2.
 
@@ -50,7 +317,7 @@ You should see something like `Python 3.13.x`. Any version 3.10 or higher works.
 
 > **⚠️ "正在验证" (Verifying) dialog?** macOS sometimes shows a "Verifying..." spinner when you open a downloaded file. This is normal — just wait 10-30 seconds. If it takes longer than a minute, right-click the file → Open. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md#macos-verifying-dialog) for more help.
 
-### Step 2: Download the App
+#### Step 2: Download the App
 
 Go to the [Releases page](https://github.com/Evan1108-Coder/AI-Debate-Council/releases) and download the correct `.dmg` file:
 
@@ -59,7 +326,7 @@ Go to the [Releases page](https://github.com/Evan1108-Coder/AI-Debate-Council/re
 
 > **Not sure which Mac you have?** Click the Apple menu () → **About This Mac**. If it says "Apple M1" (or M2, M3, M4), download the **arm64** version. If it says "Intel", download the other one.
 
-### Step 3: Install the App
+#### Step 3: Install the App
 
 1. Double-click the downloaded `.dmg` file
 2. A window appears showing the app icon and an Applications folder
@@ -68,7 +335,7 @@ Go to the [Releases page](https://github.com/Evan1108-Coder/AI-Debate-Council/re
 5. Close the `.dmg` window
 6. (Optional) Eject the disk image: right-click "AI Debate Council" on your desktop → Eject
 
-### Step 4: Open the App for the First Time
+#### Step 4: Open the App for the First Time
 
 > **⚠️ This step is important.** Because the app is not signed with an Apple Developer certificate (normal for open-source apps), macOS will try to block it. Follow these steps exactly.
 
@@ -99,7 +366,7 @@ Go to the [Releases page](https://github.com/Evan1108-Coder/AI-Debate-Council/re
 
 See [TROUBLESHOOTING.md](TROUBLESHOOTING.md#macos-gatekeeper-blocks-the-app) for more Gatekeeper scenarios.
 
-### Step 5: Wait for First-Time Setup
+#### Step 5: Wait for First-Time Setup
 
 On the **very first launch**, the app will:
 
@@ -112,7 +379,7 @@ On the **very first launch**, the app will:
 
 > **⚠️ It looks stuck?** The splash screen should show changing status messages (package names updating). If the same message stays for more than 5 minutes, your internet connection might be slow or blocked. Close the app and try again. See [TROUBLESHOOTING.md](TROUBLESHOOTING.md#pip-install-hangs) for more help.
 
-### Step 6: Set Up Your API Keys
+#### Step 6: Set Up Your API Keys
 
 Once the app opens, you need to add at least one AI provider API key:
 
@@ -138,52 +405,9 @@ Once the app opens, you need to add at least one AI provider API key:
 
 One API key unlocks all models from that provider. See [ENVREADME.md](ENVREADME.md) for the full list of 21 models across 6 providers.
 
-### Step 7: What You'll See (Welcome Screen)
+### Windows
 
-When the app finishes loading, you'll see a welcome screen like this:
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│  DEBATE COACH                                               │
-│  AI Debate Coach & Council               [New] button       │
-│  0/10 sessions                                              │
-│                                                             │
-│  "Create a session to begin."                               │
-│                                                             │
-│  ┌─────────────────┐  ┌──────────────────┐  First 60 secs   │
-│  │ AI vs Human     │  │ AI vs AI Debate  │  Verified: 0     │
-│  │ Debate Training │  │                  │  Providers: 0    │
-│  │ [RECOMMENDED]   │  │ [COUNCIL LAB]    │                  │
-│  │                 │  │                  │  1. Create chat  │
-│  │ Start Training  │  │ Start Council    │  2. Pick model   │
-│  │ Chat            │  │ Chat             │  3. Type topic   │
-│  └─────────────────┘  └──────────────────┘                  │
-│                                                             │
-│  Provider readiness: OpenAI [Locked], Anthropic [Locked]... │
-│  Council Settings ⚙                                         │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**Don't panic if you see "Verified Models: 0" and "Providers Ready: 0".** This is normal — it means you haven't added API keys yet (Step 6). The app works fine; you just need to add at least one API key or enable mock mode.
-**Also don't panic if you see the layout of the app is similar but different to the ASCII welcome screen. It just needs to be similar.**
-
-### Step 8: Start Your First Debate
-
-1. Click **Start Training Chat** (recommended for beginners) or **Start Council Chat**
-2. Pick a verified model from the **Overall Model** dropdown
-   - If the dropdown is empty, you need to add an API key (Step 6) or enable mock mode
-3. Type a clear debate topic, like "Should schools ban phones in class?"
-4. Press Enter and watch the debate unfold!
-
-**Quick start with mock mode (no API key needed):** If you set `MOCK_LLM_RESPONSES=true` in Step 6, a `mock-debate-model` will appear in the model dropdown. Great for testing the app before buying API credits.
-
-To switch between light and dark mode: open **Council Settings** from the sidebar footer.
-
----
-
-## Windows Setup
-
-### Step 1: Install Python
+#### Step 1: Install Python
 
 1. Go to [python.org/downloads](https://www.python.org/downloads/)
 2. Click the big yellow "Download Python 3.x.x" button
@@ -200,18 +424,18 @@ python --version
 
 You should see `Python 3.x.x` (3.10 or higher).
 
-### Step 2: Download and Install the App
+#### Step 2: Download and Install the App
 
 1. Go to the [Releases page](https://github.com/Evan1108-Coder/AI-Debate-Council/releases)
 2. Download `AI Debate Council Setup 1.0.0.exe`
 3. Run the installer and follow the prompts
 4. The app installs and may launch automatically
 
-### Step 3: First Launch
+#### Step 3: First Launch
 
 Same as macOS — the first launch takes 1–3 minutes to set up the Python environment. The splash screen shows progress as packages are installed.
 
-### Step 4: Set Up Your API Keys
+#### Step 4: Set Up Your API Keys
 
 1. Open PowerShell and run:
 
@@ -224,32 +448,10 @@ Same as macOS — the first launch takes 1–3 minutes to set up the Python envi
 2. Add your API key(s), save, and close Notepad
 3. Quit and relaunch the app
 
----
-
-## Testing Without API Keys (Mock Mode)
-
-To try the app without spending money on API calls:
-
-1. Open the `.env` file (see Step 6 above)
-2. Add this line:
-
-   ```text
-   MOCK_LLM_RESPONSES=true
-   ```
-
-3. Save and relaunch the app
-4. A `mock-debate-model` will appear in the model dropdown
-
-Mock mode streams fake responses that exercise the full UI — debate turns, judge verdict, analytics, and all.
-
----
-
-## Building From Source
-
-If you want to build the desktop app yourself instead of using the pre-built installer:
+### Building the Desktop App From Source
 
 ```bash
-git clone -b master-app-interface https://github.com/Evan1108-Coder/AI-Debate-Council.git
+git clone https://github.com/Evan1108-Coder/AI-Debate-Council.git
 cd AI-Debate-Council
 
 # Set up backend
@@ -271,27 +473,85 @@ Built installers appear in the `electron/dist/` directory.
 
 ---
 
-## What You'll See
+## Mock Mode (Both Deployment Modes)
 
-Once the app launches, you'll see the main workspace with the sidebar on the left and the debate area on the right.
+To test the full UI without real API calls or provider keys:
 
-![Debate Session View](docs/images/debate-session.png)
+1. Set in `.env`:
 
-*The debate session view showing a completed AI vs AI debate with Judge verdict, cost tracking, and the message input area.*
+   ```text
+   MOCK_LLM_RESPONSES=true
+   ```
 
-Click **Graphs & Statistics** to see detailed analytics after a debate completes:
+2. Restart the app (or the backend, for web mode).
 
-![Graphs and Statistics](docs/images/graphs-stats.png)
+3. A `mock-debate-model` will appear in the dropdown. Select it and start a debate. The backend streams fake responses that exercise the full UI flow — debate turns, judge verdict, analytics, and all.
 
-*Phase timeline, voting results, Bayesian analysis, and role weights generated from the debate transcript.*
+Mock mode is useful for:
+
+- Frontend development without spending API credits.
+- Testing the debate flow, settings panel, analytics UI, Debate Intelligence, multi-judge panel display, verdict review, and practice-mode flow.
+- Verifying the setup works before adding real API keys.
+
+---
+
+## Running Tests
+
+The backend includes unit tests that work without API keys:
+
+```bash
+# Run all tests
+python3.13 -m unittest discover -s backend/tests -v
+
+# Run individual test modules
+python3.13 -m unittest backend.tests.test_session_naming -v
+python3.13 -m unittest backend.tests.test_model_registry -v
+python3.13 -m unittest backend.tests.test_session_settings -v
+python3.13 -m unittest backend.tests.test_analytics -v
+python3.13 -m unittest backend.tests.test_costing -v
+python3.13 -m unittest backend.tests.test_debate_architecture -v
+```
 
 ---
 
 ## Updating
 
+### Web Version
+
+```bash
+cd AI-Debate-Council
+git pull
+
+# Reinstall backend dependencies (in case requirements changed)
+source .venv/bin/activate   # macOS/Linux
+pip install -r backend/requirements.txt
+
+# Reinstall frontend dependencies (in case package.json changed)
+cd frontend
+npm install
+```
+
+Then restart both the backend and frontend.
+
+### Desktop App
+
 Download the latest installer from [Releases](https://github.com/Evan1108-Coder/AI-Debate-Council/releases) and install over the existing version. Your `.env` file and database are preserved.
 
+---
+
 ## Uninstalling
+
+### Web Version
+
+```bash
+# Stop the backend and frontend (Ctrl+C in both terminals)
+# Delete the project folder
+rm -rf AI-Debate-Council
+```
+
+The SQLite database lives inside the project folder at `backend/data/debate_council.db`, so deleting the project folder removes all data.
+
+### Desktop App
 
 **macOS:** Drag AI Debate Council from Applications to Trash.
 

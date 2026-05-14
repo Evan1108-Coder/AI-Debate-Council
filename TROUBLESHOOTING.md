@@ -1115,4 +1115,4 @@ If dark mode does not apply:
 
 ### Building the Desktop App From Source
 
-See the [Desktop App section in README.md](README.md#desktop-app-this-branch) for build instructions.
+See the [Desktop App section in README.md](README.md#desktop-app) for build instructions.
