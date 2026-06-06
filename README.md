@@ -1,4 +1,22 @@
-# AI Debate Council — Desktop App
+# AI Debate Council - Desktop App
+
+> Status: beta multi-agent debate app. It can help compare arguments and evidence, but it should not be treated as an authority on factual, legal, medical, or financial decisions.
+
+AI Debate Council lets model teams argue opposing sides, challenge claims, track evidence, and produce judged verdicts with analytics. It is useful for exploring tradeoffs, stress-testing ideas, and practicing debate.
+
+## Why Use AI Debate Council?
+
+- Forces competing arguments instead of a single agreeable answer.
+- Tracks claims, challenges, evidence, and verdict reasoning across a debate.
+- Supports AI-vs-AI exploration and AI-vs-human debate practice.
+- Shows analytics and long-term debate memory instead of only a transcript.
+
+## Current Limitations
+
+- Model debates can still hallucinate or overweight weak evidence.
+- Verdicts are structured opinions, not proof.
+- Costs, latency, and quality depend on the selected model providers.
+
 
 > **This is the `master-app-interface` branch** — the Electron desktop application (macOS `.dmg` / Windows `.exe`). For the web version that runs in your browser, see the [`master-website-interface`](https://github.com/Evan1108-Coder/AI-Debate-Council/tree/master-website-interface) branch.
 
@@ -6,7 +24,9 @@ AI Debate Council is a multi-AI debate system where two AI teams — Pro and Con
 
 The backend is Python 3.13, FastAPI, SQLite, WebSockets, and LiteLLM. The frontend is Next.js, React, TypeScript, and Tailwind CSS. The desktop shell is Electron.
 
-## Screenshots: These values inside the screenshots are placeholders, so they are not real information to be judged.
+## Screenshots
+
+Note: screenshot values are placeholders for demonstration, not claims or factual debate results.
 
 ### AI vs AI Debate — Judge Verdict and Cost Tracking
 
