@@ -2936,6 +2936,9 @@ class DebateManager:
         comparison_winner = self._detect_comparison_winner(text)
         if comparison_winner != "unclear":
             return comparison_winner
+        direct_winner = self._detect_direct_winner_signal(text)
+        if direct_winner != "unclear":
+            return direct_winner
         candidate_sentences = [
             sentence.strip()
             for sentence in re.split(r"(?<=[.!?。！？])\s+|\n+", text)
@@ -2959,6 +2962,9 @@ class DebateManager:
             comparison_winner = self._detect_comparison_winner(sentence)
             if comparison_winner != "unclear":
                 return comparison_winner
+            direct_winner = self._detect_direct_winner_signal(sentence)
+            if direct_winner != "unclear":
+                return direct_winner
             pro_hit = any(re.search(rf"\b{re.escape(alias)}\b", sentence) for alias in pro_aliases)
             con_hit = any(re.search(rf"\b{re.escape(alias)}\b", sentence) for alias in con_aliases)
             if pro_hit and con_hit:
@@ -2971,6 +2977,23 @@ class DebateManager:
                 return "pro"
             if con_hit and not pro_hit:
                 return "con"
+        return "unclear"
+
+    def _detect_direct_winner_signal(self, text: str) -> str:
+        side_aliases = {
+            "pro": r"(?:pro|pro\s+team|pro\s+advocate|pro\s+case|pro\s+side|affirmative)",
+            "con": r"(?:con|con\s+team|con\s+advocate|con\s+case|con\s+side|negative)",
+        }
+        direct_patterns = (
+            r"(?:winner|verdict|decision|judgment|judgement)\s*(?:is|:|goes\s+to|for|favo[u]?rs?)\s*(?:the\s+)?{side}",
+            r"(?:i\s+)?(?:side|sided)\s+with\s+(?:the\s+)?{side}",
+            r"(?:i\s+)?(?:award|give)\s+(?:the\s+)?(?:win|debate|verdict)\s+to\s+(?:the\s+)?{side}",
+            r"(?:the\s+)?{side}\s+(?:wins?|is\s+the\s+winner|takes?\s+the\s+debate|has\s+the\s+winning\s+position)",
+        )
+        for side, alias in side_aliases.items():
+            for pattern in direct_patterns:
+                if re.search(pattern.format(side=alias), text):
+                    return side
         return "unclear"
 
     def _detect_nearby_winner_signal(

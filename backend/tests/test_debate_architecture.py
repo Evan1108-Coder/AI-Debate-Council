@@ -369,6 +369,19 @@ class DebateArchitectureTests(unittest.TestCase):
         self.assertTrue(pro_summary.startswith("WINNER: Pro\nReason:"))
         self.assertTrue(con_summary.startswith("WINNER: Con\nReason:"))
 
+    def test_judge_summary_detects_direct_winner_when_both_teams_are_named(self) -> None:
+        pro_summary = self.manager._normalize_judge_summary(
+            "Both teams made strong points, but the verdict goes to the Pro team because it proved the core burden.",
+            "Should schools ban phones?",
+        )
+        con_summary = self.manager._normalize_judge_summary(
+            "The Pro team had clearer framing and the Con team had better evidence; I side with Con on the final verdict.",
+            "Should schools ban phones?",
+        )
+
+        self.assertTrue(pro_summary.startswith("WINNER: Pro\nReason:"))
+        self.assertTrue(con_summary.startswith("WINNER: Con\nReason:"))
+
     def test_weighted_verdict_explains_tie_threshold_when_result_is_unclear(self) -> None:
         summary = self.manager._compose_panel_consensus_summary(
             topic="Should cities ban private cars downtown?",

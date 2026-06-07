@@ -155,6 +155,18 @@ class DebateAnalyticsTests(unittest.TestCase):
             _infer_debate_winner("The Con case is more persuasive than the Pro case on evidence."),
             "con",
         )
+        self.assertEqual(
+            _infer_debate_winner(
+                "Both teams had strong moments, but the verdict goes to the Pro team."
+            ),
+            "pro",
+        )
+        self.assertEqual(
+            _infer_debate_winner(
+                "The Pro team had clearer framing and the Con team had better evidence; I side with Con on the final verdict."
+            ),
+            "con",
+        )
 
     def test_cjk_transcript_is_tokenized_and_analyzed(self) -> None:
         analysis = analyze_debate(

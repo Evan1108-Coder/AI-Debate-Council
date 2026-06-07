@@ -344,6 +344,9 @@ def _infer_debate_winner(summary: str) -> str:
     comparison_winner = _comparison_winner(normalized)
     if comparison_winner != "unclear":
         return comparison_winner
+    direct_winner = _direct_winner_signal(normalized)
+    if direct_winner != "unclear":
+        return direct_winner
     sentences = [
         sentence.strip()
         for sentence in re.split(r"(?<=[.!?。！？])\s+|\n+", normalized)
@@ -358,6 +361,9 @@ def _infer_debate_winner(summary: str) -> str:
         comparison_winner = _comparison_winner(sentence)
         if comparison_winner != "unclear":
             return comparison_winner
+        direct_winner = _direct_winner_signal(sentence)
+        if direct_winner != "unclear":
+            return direct_winner
         pro_hit = _contains_any_alias(sentence, PRO_WIN_ALIASES)
         con_hit = _contains_any_alias(sentence, CON_WIN_ALIASES)
         if pro_hit and not con_hit:
@@ -904,6 +910,24 @@ def _comparison_winner(text: str) -> str:
             text,
         ):
             return winner
+    return "unclear"
+
+
+def _direct_winner_signal(text: str) -> str:
+    side_aliases = {
+        "pro": r"(?:pro|pro\s+team|pro\s+advocate|pro\s+case|pro\s+side|affirmative)",
+        "con": r"(?:con|con\s+team|con\s+advocate|con\s+case|con\s+side|negative)",
+    }
+    direct_patterns = (
+        r"(?:winner|verdict|decision|judgment|judgement)\s*(?:is|:|goes\s+to|for|favo[u]?rs?)\s*(?:the\s+)?{side}",
+        r"(?:i\s+)?(?:side|sided)\s+with\s+(?:the\s+)?{side}",
+        r"(?:i\s+)?(?:award|give)\s+(?:the\s+)?(?:win|debate|verdict)\s+to\s+(?:the\s+)?{side}",
+        r"(?:the\s+)?{side}\s+(?:wins?|is\s+the\s+winner|takes?\s+the\s+debate|has\s+the\s+winning\s+position)",
+    )
+    for side, alias in side_aliases.items():
+        for pattern in direct_patterns:
+            if re.search(pattern.format(side=alias), text):
+                return side
     return "unclear"
 
 
