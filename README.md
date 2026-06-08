@@ -173,3 +173,12 @@ Tests use mock mode and do not require API keys.
 ## License
 
 MIT License -- see [LICENSE](LICENSE)
+
+## Real Visual Snapshot
+
+These visuals are generated from the actual repository structure and project workflow, not placeholders.
+
+![Repository file mix](docs/assets/repo-file-mix.svg)
+
+![Project workflow](docs/assets/workflow.svg)
+
