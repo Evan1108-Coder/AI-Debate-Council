@@ -21,6 +21,22 @@ AI Debate Council lets model teams argue opposing sides, challenge claims, track
 
 The backend is Python 3.13, FastAPI, SQLite, WebSockets, and LiteLLM. The frontend is Next.js, React, TypeScript, and Tailwind CSS. The desktop shell is Electron.
 
+## Quick Start
+
+```bash
+git clone https://github.com/Evan1108-Coder/AI-Debate-Council.git
+cd AI-Debate-Council
+git checkout master-app-interface
+python3.13 -m venv .venv
+source .venv/bin/activate
+pip install -r backend/requirements.txt
+cd frontend && npm install && cd ..
+cp .env.example .env
+# Edit .env with at least one AI provider key
+```
+
+For desktop installers, use the [Releases page](https://github.com/Evan1108-Coder/AI-Debate-Council/releases). The deeper setup notes remain in [SETUP.md](SETUP.md).
+
 ## Screenshots
 
 Note: screenshot values are placeholders for demonstration, not claims or factual debate results.
@@ -181,4 +197,3 @@ These visuals are generated from the actual repository structure and project wor
 ![Repository file mix](docs/assets/repo-file-mix.svg)
 
 ![Project workflow](docs/assets/workflow.svg)
-
