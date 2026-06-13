@@ -309,6 +309,15 @@ class SupportedModel:
 
 
 MODEL_MAP: dict[str, SupportedModel] = {
+    "gpt-5.5-pro": SupportedModel(
+        "gpt-5.5-pro", "openai", "OpenAI", "OPENAI_API_KEY", "gpt-5.5-pro"
+    ),
+    "gpt-5.5": SupportedModel(
+        "gpt-5.5", "openai", "OpenAI", "OPENAI_API_KEY", "gpt-5.5"
+    ),
+    "gpt-5.5-mini": SupportedModel(
+        "gpt-5.5-mini", "openai", "OpenAI", "OPENAI_API_KEY", "gpt-5.5-mini"
+    ),
     "gpt-5.4-pro": SupportedModel(
         "gpt-5.4-pro", "openai", "OpenAI", "OPENAI_API_KEY", "gpt-5.4-pro"
     ),
@@ -318,6 +327,20 @@ MODEL_MAP: dict[str, SupportedModel] = {
     "gpt-4o": SupportedModel("gpt-4o", "openai", "OpenAI", "OPENAI_API_KEY", "gpt-4o"),
     "gpt-4o-mini": SupportedModel(
         "gpt-4o-mini", "openai", "OpenAI", "OPENAI_API_KEY", "gpt-4o-mini"
+    ),
+    "claude-opus-4-7": SupportedModel(
+        "claude-opus-4-7",
+        "anthropic",
+        "Anthropic",
+        "ANTHROPIC_API_KEY",
+        "anthropic/claude-opus-4-7",
+    ),
+    "claude-sonnet-4-7": SupportedModel(
+        "claude-sonnet-4-7",
+        "anthropic",
+        "Anthropic",
+        "ANTHROPIC_API_KEY",
+        "anthropic/claude-sonnet-4-7",
     ),
     "claude-opus-4-6": SupportedModel(
         "claude-opus-4-6",
@@ -396,12 +419,19 @@ MODEL_MAP: dict[str, SupportedModel] = {
         "MINIMAX_API_KEY",
         "minimax/minimax-m2.7",
     ),
-    "minimax-m2.5-lightning": SupportedModel(
-        "minimax-m2.5-lightning",
+    "minimax-m3": SupportedModel(
+        "minimax-m3",
         "minimax",
         "MiniMax",
         "MINIMAX_API_KEY",
-        "minimax/minimax-m2.5-lightning",
+        "minimax/MiniMax-M3",
+    ),
+    "minimax-m2.5": SupportedModel(
+        "minimax-m2.5",
+        "minimax",
+        "MiniMax",
+        "MINIMAX_API_KEY",
+        "minimax/MiniMax-M2.5",
     ),
     "kimi-latest": SupportedModel(
         "kimi-latest",
@@ -458,7 +488,11 @@ def all_models() -> list[SupportedModel]:
 
 def available_models() -> list[SupportedModel]:
     models = [model for model in SUPPORTED_MODELS if model.runtime_available]
-    openai_preferred_order = {"gpt-4o-mini": 0, "gpt-4o": 1, "gpt-5.4-mini": 2, "gpt-5.4-pro": 3}
+    openai_preferred_order = {
+        "gpt-4o-mini": 0, "gpt-4o": 1,
+        "gpt-5.4-mini": 2, "gpt-5.4-pro": 3,
+        "gpt-5.5-mini": 4, "gpt-5.5": 5, "gpt-5.5-pro": 6,
+    }
     return sorted(
         models,
         key=lambda model: (

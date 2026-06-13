@@ -20,7 +20,7 @@ class ModelRegistryTests(unittest.TestCase):
         _MODEL_RUNTIME_CACHE.clear()
 
     def test_model_map_knows_all_supported_models(self) -> None:
-        self.assertEqual(len(MODEL_MAP), 21)
+        self.assertEqual(len(MODEL_MAP), 27)
         self.assertEqual(MODEL_MAP["gpt-4o"].provider, "openai")
         self.assertEqual(MODEL_MAP["claude-sonnet-4-6"].provider, "anthropic")
         self.assertEqual(MODEL_MAP["llama-4-maverick"].provider, "groq")
@@ -31,7 +31,7 @@ class ModelRegistryTests(unittest.TestCase):
 
         self.assertEqual(
             names,
-            {"gpt-5.4-pro", "gpt-5.4-mini", "gpt-4o", "gpt-4o-mini"},
+            {"gpt-5.5-pro", "gpt-5.5", "gpt-5.5-mini", "gpt-5.4-pro", "gpt-5.4-mini", "gpt-4o", "gpt-4o-mini"},
         )
 
     def test_multiple_provider_keys_unlock_combined_dropdown_models(self) -> None:
@@ -42,7 +42,7 @@ class ModelRegistryTests(unittest.TestCase):
         ):
             names = {model.name for model in available_models()}
 
-        self.assertEqual(len(names), 8)
+        self.assertEqual(len(names), 13)
         self.assertIn("gpt-4o", names)
         self.assertIn("claude-opus-4-6", names)
 

@@ -34,10 +34,15 @@ EXCHANGE_RATES_PER_USD = {
 # Local fallback prices are USD per 1M input/output tokens for normal pay-as-you-go text use.
 # These stay in the repo as a safety net when live pricing cannot be verified.
 LOCAL_FALLBACK_MODEL_PRICES_USD_PER_1M = {
+    "gpt-5.5-pro": (30.0, 180.0),
+    "gpt-5.5": (15.0, 90.0),
+    "gpt-5.5-mini": (0.75, 4.5),
     "gpt-5.4-pro": (30.0, 180.0),
     "gpt-5.4-mini": (0.75, 4.5),
     "gpt-4o": (2.5, 10.0),
     "gpt-4o-mini": (0.15, 0.6),
+    "claude-opus-4-7": (5.0, 25.0),
+    "claude-sonnet-4-7": (3.0, 15.0),
     "claude-opus-4-6": (5.0, 25.0),
     "claude-sonnet-4-6": (3.0, 15.0),
     "claude-haiku-4-5": (1.0, 5.0),
@@ -48,8 +53,9 @@ LOCAL_FALLBACK_MODEL_PRICES_USD_PER_1M = {
     "llama-4-maverick": (0.2, 0.6),
     "llama-4-scout": (0.11, 0.34),
     "llama-3.3-70b": (0.59, 0.79),
+    "minimax-m3": (0.3, 1.2),
     "minimax-m2.7": (0.3, 1.2),
-    "minimax-m2.5-lightning": (0.6, 2.4),
+    "minimax-m2.5": (0.6, 2.4),
     "kimi-latest": (0.6, 2.0),
     "kimi-k2-thinking": (0.6, 2.0),
     "kimi-k2-turbo-preview": (0.6, 2.0),
@@ -62,10 +68,15 @@ OPENROUTER_PRICING_CACHE_TTL_SECONDS = 3600
 OPENROUTER_PRICING_TIMEOUT_SECONDS = 6
 OPENROUTER_PRICING_ENV = "OPENROUTER_API_KEY"
 OPENROUTER_MODEL_ALIASES: dict[str, tuple[str, ...]] = {
+    "gpt-5.5-pro": ("openai/gpt-5.5-pro", "gpt-5.5-pro"),
+    "gpt-5.5": ("openai/gpt-5.5", "gpt-5.5"),
+    "gpt-5.5-mini": ("openai/gpt-5.5-mini", "gpt-5.5-mini"),
     "gpt-5.4-pro": ("openai/gpt-5.4", "gpt-5.4"),
     "gpt-5.4-mini": ("openai/gpt-5.4-mini", "gpt-5.4-mini"),
     "gpt-4o": ("openai/gpt-4o", "gpt-4o"),
     "gpt-4o-mini": ("openai/gpt-4o-mini", "gpt-4o-mini"),
+    "claude-opus-4-7": ("anthropic/claude-opus-4.7", "claude-opus-4.7"),
+    "claude-sonnet-4-7": ("anthropic/claude-sonnet-4.7", "claude-sonnet-4.7"),
     "claude-opus-4-6": ("anthropic/claude-opus-4.6", "claude-opus-4.6"),
     "claude-sonnet-4-6": ("anthropic/claude-sonnet-4.6", "claude-sonnet-4.6"),
     "claude-haiku-4-5": ("anthropic/claude-haiku-4.5", "claude-haiku-4.5"),
@@ -76,8 +87,9 @@ OPENROUTER_MODEL_ALIASES: dict[str, tuple[str, ...]] = {
     "llama-4-maverick": ("meta-llama/llama-4-maverick", "llama-4-maverick"),
     "llama-4-scout": ("meta-llama/llama-4-scout", "llama-4-scout"),
     "llama-3.3-70b": ("meta-llama/llama-3.3-70b-instruct", "llama-3.3-70b"),
+    "minimax-m3": ("minimax/MiniMax-M3", "minimax-m3"),
     "minimax-m2.7": ("minimax/minimax-m2.7", "minimax-m2.7"),
-    "minimax-m2.5-lightning": ("minimax/minimax-m2.5-lightning", "minimax-m2.5-lightning"),
+    "minimax-m2.5": ("minimax/MiniMax-M2.5", "minimax-m2.5"),
     "kimi-latest": ("moonshotai/kimi-latest", "kimi-latest"),
     "kimi-k2-thinking": ("moonshotai/kimi-k2-thinking", "kimi-k2-thinking"),
     "kimi-k2-turbo-preview": ("moonshotai/kimi-k2-turbo-preview", "kimi-k2-turbo-preview"),

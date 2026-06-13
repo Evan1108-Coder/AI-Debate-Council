@@ -121,7 +121,7 @@ Get your key from: [console.groq.com/keys](https://console.groq.com/keys)
 MINIMAX_API_KEY=...
 ```
 
-**Models unlocked**: `minimax-m2.7`, `minimax-m2.5-lightning`
+**Models unlocked**: `minimax-m3`, `minimax-m2.7`, `minimax-m2.5`
 
 ### Moonshot
 

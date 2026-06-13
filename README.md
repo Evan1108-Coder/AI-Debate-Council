@@ -84,7 +84,7 @@ Note: screenshot values are placeholders for demonstration, not claims or factua
 - **Judge AI verdict** with optional multi-judge panel (3 or 5) and analytics-weighted scoring
 - **AI vs Human Debate Training** -- practice mode with AI opponent, Debate Trainer coaching, and persistent user profile
 - **Council Assistant** -- dual-mode chat that classifies messages as debate or conversation
-- **21 models across 6 providers** -- OpenAI, Anthropic, Google, Groq, MiniMax, Moonshot
+- **28 models across 6 providers** -- OpenAI, Anthropic, Google, Groq, MiniMax, Moonshot
 - **10-method analytics engine** -- Bayesian inference, argument mining, game theory, ELO credibility, and more
 - **Real-time charts** -- Bayesian pie chart, role weight bars, stance votes, trend lines, phase timeline
 - **Cost tracking** -- per-debate and per-turn estimates in 9 currencies with live OpenRouter pricing
@@ -97,11 +97,11 @@ Add only provider API keys to `.env` -- no model names needed. The app auto-dete
 
 | Provider | API Key Variable | Models |
 | --- | --- | --- |
-| OpenAI | `OPENAI_API_KEY` | gpt-5.4-pro, gpt-5.4-mini, gpt-4o, gpt-4o-mini |
-| Anthropic | `ANTHROPIC_API_KEY` | claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5, claude-3.5-sonnet |
+| OpenAI | `OPENAI_API_KEY` | gpt-5.5-pro, gpt-5.5, gpt-5.5-mini, gpt-5.4-pro, gpt-5.4-mini, gpt-4o, gpt-4o-mini |
+| Anthropic | `ANTHROPIC_API_KEY` | claude-opus-4-7, claude-sonnet-4-7, claude-opus-4-6, claude-sonnet-4-6, claude-haiku-4-5, claude-3.5-sonnet |
 | Google | `GOOGLE_API_KEY` | gemini-3.1-pro, gemini-3-flash, gemini-2.5-flash-lite |
 | Llama via Groq | `GROQ_API_KEY` | llama-4-maverick, llama-4-scout, llama-3.3-70b |
-| MiniMax | `MINIMAX_API_KEY` | minimax-m2.7, minimax-m2.5-lightning |
+| MiniMax | `MINIMAX_API_KEY` | minimax-m3, minimax-m2.7, minimax-m2.5 |
 | Moonshot | `MOONSHOT_API_KEY` | kimi-latest, kimi-k2-thinking, kimi-k2-turbo-preview, kimi-k2.5-vision, moonshot-v1-128k |
 
 ## Desktop App (This Branch)
